@@ -42,17 +42,18 @@ async function processOne(env: Env, jobId: string, item: any) {
 
 export async function handleQueue(batch: MessageBatch<any>, env: Env) {
   for (const msg of batch.messages) {
-    const { jobId } = msg.body || {};
+    const { jobId, record: msgRecord } = msg.body || {};
     if (!jobId) {
       msg.ack();
       continue;
     }
-    const raw = await env.JOBS.get(jobId);
-    if (!raw) {
+    const rec = (
+      msgRecord ? msgRecord : JSON.parse((await env.JOBS.get(jobId)) || '{}')
+    ) as JobRecord;
+    if (!rec || !rec.id) {
       msg.ack();
       continue;
     }
-    const rec = JSON.parse(raw) as JobRecord;
     rec.status = 'processing';
     await env.JOBS.put(jobId, JSON.stringify(rec), { expirationTtl: 86400 });
     try {

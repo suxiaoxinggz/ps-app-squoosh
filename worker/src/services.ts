@@ -73,7 +73,7 @@ export async function createJob(
     inline,
   };
   await env.JOBS.put(jobId, JSON.stringify(record), { expirationTtl: 86400 });
-  await env.QUEUE.send({ jobId, token });
+  await env.QUEUE.send({ jobId, token, record });
   return jobId;
 }
 
