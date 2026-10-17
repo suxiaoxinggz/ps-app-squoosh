@@ -2,11 +2,11 @@
 
 同一套图片处理能力，两种入口：
 
-| 入口            | 地址                                | 说明                                 |
-| --------------- | ----------------------------------- | ------------------------------------ |
-| 网页用户        | `https://squoosh.016666666.xyz`     | 原 Squoosh PWA，浏览器 WASM 本地压缩 |
-| MCP（AI Agent） | `https://squoosh.016666666.xyz/mcp` | JSON-RPC + SSE，异步压缩             |
-| 压缩后端        | Render Node 服务（sharp）           | Worker 队列调用                      |
+| 入口            | 地址                                                               | 说明                                                                              |
+| --------------- | ------------------------------------------------------------------ | --------------------------------------------------------------------------------- |
+| 网页用户        | `https://squoosh.016666666.xyz` 或 `http://squoosh.mistorify.com/` | 原 Squoosh PWA，浏览器 WASM 本地压缩（两域名都可用）                              |
+| MCP（AI Agent） | `https://squoosh.016666666.xyz/mcp`                                | JSON-RPC + SSE，异步压缩（必须用此域名；mistorify 有 Bot 挑战，程序调用会被 403） |
+| 压缩后端        | Render Node 服务（sharp）                                          | Worker 队列调用                                                                   |
 
 架构：`Agent → Worker 网关（MCP/队列/R2/KV）→ Render Node（sharp 真实压缩）→ R2 临时存储 → 签名下载 URL`。
 结果文件 24h 自动清理；job 按 token 隔离，只能查自己的 jobId。
