@@ -1,0 +1,26 @@
+name = "squoosh-mcp"
+main = "src/index.ts"
+compatibility_date = "2024-11-01"
+compatibility_flags = ["nodejs_compat"]
+
+[assets]
+directory = "../.tmp/build/static"
+binding = "ASSETS"
+
+[[r2_buckets]]
+binding = "BUCKET"
+bucket_name = "squoosh-tmp"
+
+[[kv_namespaces]]
+binding = "JOBS"
+id = "fcf56093bb494457a51a7dce95b4ff92"
+
+[[queues.producers]]
+binding = "QUEUE"
+queue = "squoosh-jobs"
+
+[[queues.consumers]]
+queue = "squoosh-jobs"
+max_batch_size = 10
+max_batch_timeout = 30
+max_concurrency = 20
