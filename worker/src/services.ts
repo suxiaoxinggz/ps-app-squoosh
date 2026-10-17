@@ -35,7 +35,7 @@ export async function readSource(env: Env, source: any) {
   throw new Error('invalid source');
 }
 
-export async function createJob(
+export async function processJobSync(
   env: Env,
   token: string,
   itemsInput: any[],
@@ -46,34 +46,83 @@ export async function createJob(
   for (let i = 0; i < itemsInput.length; i++) {
     const it = itemsInput[i];
     let inputKey: string;
+    let bytes: Uint8Array;
+    let mime: string | undefined;
+    let name: string | undefined;
     if (it.r2Key) {
       inputKey = it.r2Key;
+      const obj = await env.BUCKET.get(inputKey);
+      if (!obj) throw new Error('r2 object not found');
+      const buf = await obj.arrayBuffer();
+      bytes = new Uint8Array(buf);
+      mime = obj.httpMetadata?.contentType;
+      name = it.filename;
     } else {
-      const { bytes, mime, name } = await readSource(env, it.source);
+      const src = await readSource(env, it.source);
+      bytes = src.bytes;
+      mime = src.mime;
+      name = src.name;
       inputKey = `jobs/${jobId}/input-${i}-${name || 'image'}`;
       await env.BUCKET.put(inputKey, bytes, {
         httpMetadata: { contentType: mime },
       });
     }
+    // process via Render if available
+    let outputKey: string;
+    let size: number;
+    let outMime: string;
+    let ext: string;
+    if (env.RENDER_URL) {
+      const b64 = btoa(String.fromCharCode(...bytes));
+      const res = await fetch(`${env.RENDER_URL.replace(/\/$/, '')}/compress`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          imageBase64: b64,
+          format: it.format || 'jpeg',
+          options: it.options || {},
+        }),
+      });
+      if (!res.ok) throw new Error(`render failed ${res.status}`);
+      const data = (await res.json()) as any;
+      const outBuf = Uint8Array.from(atob(data.base64), (c) => c.charCodeAt(0));
+      ext = data.ext || 'jpg';
+      outMime = data.mime;
+      outputKey = `jobs/${jobId}/item-${i}-out.${ext}`;
+      await env.BUCKET.put(outputKey, outBuf, {
+        httpMetadata: { contentType: outMime },
+      });
+      size = outBuf.length;
+    } else {
+      ext = 'bin';
+      outMime = mime || 'application/octet-stream';
+      outputKey = `jobs/${jobId}/item-${i}-out.bin`;
+      await env.BUCKET.put(outputKey, bytes, {
+        httpMetadata: { contentType: outMime },
+      });
+      size = bytes.length;
+    }
     items.push({
       id: `item-${i}`,
-      status: 'queued',
+      status: 'done',
       inputKey,
+      outputKey,
       format: it.format,
       options: it.options,
+      size,
+      mime: outMime,
     });
   }
   const record: JobRecord = {
     id: jobId,
     owner: token,
-    status: 'queued',
+    status: 'done',
     createdAt: Date.now(),
     expiresAt: Date.now() + 24 * 3600 * 1000,
     items,
     inline,
   };
   await env.JOBS.put(jobId, JSON.stringify(record), { expirationTtl: 86400 });
-  await env.QUEUE.send({ jobId, token, record });
   return jobId;
 }
 
