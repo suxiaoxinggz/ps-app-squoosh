@@ -8,40 +8,82 @@ app.use(express.json({ limit: '50mb' }));
 
 app.get('/health', (req, res) => res.json({ ok: true }));
 
+const OPTION_SCHEMAS = {
+  jpeg: {
+    quality: { type: 'number', min: 1, max: 100, default: 80 },
+    width: { type: 'number' },
+    height: { type: 'number' },
+  },
+  png: { width: { type: 'number' }, height: { type: 'number' } },
+  webp: {
+    quality: { type: 'number', min: 1, max: 100, default: 80 },
+    width: { type: 'number' },
+    height: { type: 'number' },
+    lossless: { type: 'boolean', default: false },
+  },
+  avif: {
+    quality: { type: 'number', min: 1, max: 100, default: 80 },
+    width: { type: 'number' },
+    height: { type: 'number' },
+  },
+};
+
+app.get('/options/:format', (req, res) => {
+  const f = req.params.format;
+  if (!OPTION_SCHEMAS[f])
+    return res.status(404).json({ error: 'unknown format' });
+  res.json({ format: f, schema: OPTION_SCHEMAS[f] });
+});
+
 app.post('/compress', async (req, res) => {
   try {
-    const {
-      imageBase64,
-      format = 'jpeg',
-      quality = 80,
-      width,
-      height,
-    } = req.body || {};
+    const { imageBase64, format = 'jpeg', options = {} } = req.body || {};
     if (!imageBase64)
-      return res.status(400).json({ error: 'imageBase64 required' });
+      return res
+        .status(400)
+        .json({
+          error:
+            'imageBase64 required. Send base64 (data-uri prefix optional).',
+        });
+    if (!['jpeg', 'png', 'webp', 'avif'].includes(format))
+      return res
+        .status(400)
+        .json({
+          error: `unsupported format "${format}". Use jpeg|png|webp|avif.`,
+        });
     const buf = Buffer.from(
       imageBase64.replace(/^data:[^;]+;base64,/, ''),
       'base64',
     );
+    if (buf.length > 10 * 1024 * 1024)
+      return res
+        .status(413)
+        .json({
+          error: `image too large (${buf.length} bytes, max 10485760).`,
+        });
     let pipeline = sharp(buf);
-    if (width || height) pipeline = pipeline.resize(width, height);
+    if (options.width || options.height)
+      pipeline = pipeline.resize(options.width, options.height);
     let outBuf;
     let mime = 'image/jpeg';
     let ext = 'jpg';
+    const q = options.quality ?? 80;
     if (format === 'png') {
       outBuf = await pipeline.png().toBuffer();
       mime = 'image/png';
       ext = 'png';
     } else if (format === 'webp') {
-      outBuf = await pipeline.webp({ quality }).toBuffer();
+      outBuf = await pipeline
+        .webp({ quality: q, lossless: !!options.lossless })
+        .toBuffer();
       mime = 'image/webp';
       ext = 'webp';
     } else if (format === 'avif') {
-      outBuf = await pipeline.avif({ quality }).toBuffer();
+      outBuf = await pipeline.avif({ quality: q }).toBuffer();
       mime = 'image/avif';
       ext = 'avif';
     } else {
-      outBuf = await pipeline.jpeg({ quality }).toBuffer();
+      outBuf = await pipeline.jpeg({ quality: q }).toBuffer();
     }
     res.json({
       base64: outBuf.toString('base64'),

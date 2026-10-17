@@ -1,11 +1,16 @@
 import type { Env, JobRecord } from './types';
+import { assertSupportedFormat, bytesToBase64 } from './services';
 
 async function processOne(env: Env, jobId: string, item: any) {
+  assertSupportedFormat(item.format || 'jpeg');
   if (env.RENDER_URL) {
     const obj = await env.BUCKET.get(item.inputKey);
-    if (!obj) throw new Error('input missing');
+    if (!obj)
+      throw new Error(
+        `input missing for ${item.id}. Re-upload via upload_image.`,
+      );
     const buf = await obj.arrayBuffer();
-    const b64 = btoa(String.fromCharCode(...new Uint8Array(buf)));
+    const b64 = bytesToBase64(new Uint8Array(buf));
     const res = await fetch(`${env.RENDER_URL.replace(/\/$/, '')}/compress`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -59,14 +64,25 @@ export async function handleQueue(batch: MessageBatch<any>, env: Env) {
     try {
       for (const item of rec.items) {
         if (item.status === 'queued') {
-          await processOne(env, jobId, item);
+          item.status = 'processing';
+          try {
+            await processOne(env, jobId, item);
+          } catch (e: any) {
+            item.status = 'error';
+            item.error = e?.message || 'processing failed';
+          }
         }
       }
-      rec.status = 'done';
+      rec.status = rec.items.every((i) => i.status === 'done')
+        ? 'done'
+        : 'error';
     } catch (e: any) {
       rec.status = 'error';
       for (const item of rec.items)
-        if (item.status === 'queued') item.status = 'error';
+        if (item.status === 'queued' || item.status === 'processing') {
+          item.status = 'error';
+          item.error = e?.message || 'job failed';
+        }
     }
     await env.JOBS.put(jobId, JSON.stringify(rec), { expirationTtl: 86400 });
     msg.ack();
