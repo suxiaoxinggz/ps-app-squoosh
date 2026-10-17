@@ -60,6 +60,7 @@ export async function createJob(
       status: 'queued',
       inputKey,
       format: it.format,
+      options: it.options,
     });
   }
   const record: JobRecord = {
@@ -74,6 +75,30 @@ export async function createJob(
   await env.JOBS.put(jobId, JSON.stringify(record), { expirationTtl: 86400 });
   await env.QUEUE.send({ jobId, token });
   return jobId;
+}
+
+export const OPTION_SCHEMAS: Record<string, any> = {
+  jpeg: {
+    quality: { type: 'number', min: 1, max: 100, default: 80 },
+    width: { type: 'number' },
+    height: { type: 'number' },
+  },
+  png: { width: { type: 'number' }, height: { type: 'number' } },
+  webp: {
+    quality: { type: 'number', min: 1, max: 100, default: 80 },
+    width: { type: 'number' },
+    height: { type: 'number' },
+    lossless: { type: 'boolean', default: false },
+  },
+  avif: {
+    quality: { type: 'number', min: 1, max: 100, default: 80 },
+    width: { type: 'number' },
+    height: { type: 'number' },
+  },
+};
+
+export function getOptionSchema(format: string) {
+  return OPTION_SCHEMAS[format] || null;
 }
 
 export function listFormats() {

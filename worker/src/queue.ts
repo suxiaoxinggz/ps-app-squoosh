@@ -12,7 +12,7 @@ async function processOne(env: Env, jobId: string, item: any) {
       body: JSON.stringify({
         imageBase64: b64,
         format: item.format || 'jpeg',
-        quality: 80,
+        options: item.options || {},
       }),
     });
     if (!res.ok) throw new Error(`render failed ${res.status}`);

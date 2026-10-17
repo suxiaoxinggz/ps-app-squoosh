@@ -12,6 +12,7 @@ export interface JobItem {
   inputKey: string;
   outputKey?: string;
   format?: string;
+  options?: any;
   error?: string;
   size?: number;
   mime?: string;

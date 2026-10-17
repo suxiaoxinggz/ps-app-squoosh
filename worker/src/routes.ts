@@ -5,6 +5,7 @@ import {
   readSource,
   createJob,
   listFormats,
+  getOptionSchema,
 } from './services';
 
 export function registerRoutes(app: Hono<{ Bindings: Env }>, env: Env) {
@@ -85,6 +86,11 @@ export function registerRoutes(app: Hono<{ Bindings: Env }>, env: Env) {
   });
 
   app.get('/api/formats', (c) => c.json({ formats: listFormats() }));
+  app.get('/api/options/:format', (c) => {
+    const s = getOptionSchema(c.req.param('format'));
+    if (!s) return c.json({ error: 'not found' }, 404);
+    return c.json({ format: c.req.param('format'), schema: s });
+  });
 
   // MCP JSON-RPC
   app.post('/mcp', async (c) => {
@@ -117,6 +123,15 @@ export function registerRoutes(app: Hono<{ Bindings: Env }>, env: Env) {
             name: 'list_formats',
             description: 'List supported formats',
             inputSchema: { type: 'object', properties: {} },
+          },
+          {
+            name: 'get_options_schema',
+            description: 'Get option schema for a format',
+            inputSchema: {
+              type: 'object',
+              properties: { format: { type: 'string' } },
+              required: ['format'],
+            },
           },
           {
             name: 'compress',
@@ -198,6 +213,16 @@ export function registerRoutes(app: Hono<{ Bindings: Env }>, env: Env) {
             content: [{ type: 'text', text: JSON.stringify(listFormats()) }],
           });
         }
+        if (name === 'get_options_schema') {
+          return reply({
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify(getOptionSchema(args.format)),
+              },
+            ],
+          });
+        }
         if (name === 'compress') {
           const items = [args];
           const jobId = await createJob(
@@ -259,6 +284,31 @@ export function registerRoutes(app: Hono<{ Bindings: Env }>, env: Env) {
   });
 
   app.get('/mcp', (c) => c.text('MCP endpoint. POST JSON-RPC to /mcp', 200));
+
+  app.get('/mcp/sse', (c) => {
+    const stream = new ReadableStream({
+      start(controller) {
+        const enc = new TextEncoder();
+        controller.enqueue(enc.encode('event: endpoint\\ndata: /mcp\\n\\n'));
+        // keep alive
+        const interval = setInterval(() => {
+          controller.enqueue(enc.encode(': ping\\n\\n'));
+        }, 15000);
+        // close after 5 min
+        setTimeout(() => {
+          clearInterval(interval);
+          controller.close();
+        }, 300000);
+      },
+    });
+    return new Response(stream, {
+      headers: {
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache',
+        Connection: 'keep-alive',
+      },
+    });
+  });
 
   app.get('*', async (c) => env.ASSETS.fetch(c.req.raw));
 }
