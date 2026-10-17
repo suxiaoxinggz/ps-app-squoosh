@@ -225,6 +225,19 @@ async function createSession(env: Env): Promise<string> {
 }
 
 export function registerRoutes(app: Hono<{ Bindings: Env }>, env: Env) {
+  // CORS for browser-based MCP clients (harmless for server-side clients).
+  app.use('*', async (c, next) => {
+    await next();
+    c.header('Access-Control-Allow-Origin', '*');
+    c.header(
+      'Access-Control-Allow-Headers',
+      'Content-Type, Authorization, Accept, Mcp-Session-Id',
+    );
+    c.header('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
+    c.header('Access-Control-Expose-Headers', 'Mcp-Session-Id');
+  });
+  app.options('*', (c) => new Response(null, { status: 204 }));
+
   app.get('/health', (c) => c.json({ ok: true }));
 
   app.post('/api/upload', async (c) => {
