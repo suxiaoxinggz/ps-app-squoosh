@@ -1,6 +1,6 @@
-const express = require('express');
-const cors = require('cors');
-const sharp = require('sharp');
+import express from 'express';
+import cors from 'cors';
+import sharp from 'sharp';
 
 const app = express();
 app.use(cors());
