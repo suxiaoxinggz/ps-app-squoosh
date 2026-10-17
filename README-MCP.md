@@ -4,8 +4,8 @@
 
 | 入口            | 地址                                | 说明                                 |
 | --------------- | ----------------------------------- | ------------------------------------ |
-| 网页用户        | `https://squoosh.mistorify.com`     | 原 Squoosh PWA，浏览器 WASM 本地压缩 |
-| MCP（AI Agent） | `https://squoosh.mistorify.com/mcp` | JSON-RPC + SSE，异步压缩             |
+| 网页用户        | `https://squoosh.016666666.xyz`     | 原 Squoosh PWA，浏览器 WASM 本地压缩 |
+| MCP（AI Agent） | `https://squoosh.016666666.xyz/mcp` | JSON-RPC + SSE，异步压缩             |
 | 压缩后端        | Render Node 服务（sharp）           | Worker 队列调用                      |
 
 架构：`Agent → Worker 网关（MCP/队列/R2/KV）→ Render Node（sharp 真实压缩）→ R2 临时存储 → 签名下载 URL`。
@@ -14,7 +14,7 @@
 ## 快速验证
 
 ```bash
-curl -s https://squoosh.mistorify.com/health
+curl -s https://squoosh.016666666.xyz/health
 # {"ok":true}
 ```
 
@@ -165,7 +165,7 @@ curl -s https://squoosh.mistorify.com/health
 }
 ```
 
-下载：`GET https://squoosh.mistorify.com/files/<jobId>/<文件名>?token=<token>`。
+下载：`GET https://squoosh.016666666.xyz/files/<jobId>/<文件名>?token=<token>`。
 
 ### 8. upload_image（大文件先传后压）
 
@@ -189,14 +189,14 @@ curl -s https://squoosh.mistorify.com/health
 {
   "mcpServers": {
     "squoosh": {
-      "url": "https://squoosh.mistorify.com/mcp",
+      "url": "https://squoosh.016666666.xyz/mcp",
       "headers": { "Authorization": "Bearer <你的token>" }
     }
   }
 }
 ```
 
-SSE（可选）：`GET https://squoosh.mistorify.com/mcp/sse`（返回 `event: endpoint / data: /mcp` + 心跳）。
+SSE（可选）：`GET https://squoosh.016666666.xyz/mcp/sse`（返回 `event: endpoint / data: /mcp` + 心跳）。
 
 ## 限制
 
