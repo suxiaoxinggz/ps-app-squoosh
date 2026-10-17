@@ -289,10 +289,10 @@ export function registerRoutes(app: Hono<{ Bindings: Env }>, env: Env) {
     const stream = new ReadableStream({
       start(controller) {
         const enc = new TextEncoder();
-        controller.enqueue(enc.encode('event: endpoint\\ndata: /mcp\\n\\n'));
+        controller.enqueue(enc.encode('event: endpoint\ndata: /mcp\n\n'));
         // keep alive
         const interval = setInterval(() => {
-          controller.enqueue(enc.encode(': ping\\n\\n'));
+          controller.enqueue(enc.encode(': ping\n\n'));
         }, 15000);
         // close after 5 min
         setTimeout(() => {
