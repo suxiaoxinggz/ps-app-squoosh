@@ -4,7 +4,7 @@ compatibility_date = "2024-11-01"
 compatibility_flags = ["nodejs_compat"]
 
 [assets]
-directory = "../.tmp/build/static"
+directory = "../build"
 binding = "ASSETS"
 
 [[r2_buckets]]
