@@ -1,0 +1,20 @@
+name: smoke
+
+on:
+  push:
+    branches: [dev]
+    paths: ['worker/**', 'server/**', 'mcp-local/**']
+  workflow_dispatch:
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Smoke test production MCP
+        run: node worker/smoke.js
+        env:
+          BASE: https://squoosh.016666666.xyz
