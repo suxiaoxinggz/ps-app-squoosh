@@ -234,3 +234,21 @@ SSE（可选）：`GET https://squoosh.016666666.xyz/mcp/sse`。
   Render Dashboard 需同步设置环境变量 `RENDER_SECRET`（与 Worker 侧同一值），否则直调无鉴权。
 - CI：push 到 dev 自动跑 `worker/smoke.js`（`.github/workflows/smoke.yml`）。
 - 原有 `src/`、`codecs/` 未改动。
+
+## Upscale (experimental)
+
+Server-side ONNX upscaling via `/upscale` (gate-protected). Models: general-x4v3, anime-v3, cugan-2x, swin-light-x2.
+
+Calibration matrix (local Render-equivalent, synthetic inputs; wall ms incl. model warmup where noted):
+
+| model | input | wall ms | result | success |
+| ----- | ----- | ------- | ------ | ------- |
+| general-x4v3 | 0.5MP | 6778 | 2828x2828 | yes |
+| general-x4v3 | 1MP | 15896 | 4000x4000 | yes |
+| general-x4v3 | 2MP | 21430 | 5656x5656 | yes |
+| swin-light-x2 | 1MP | 101366 | 2000x2000 | yes |
+| swin-light-x2 | 2MP | 111609 | 2828x2828 | yes |
+| anime-v3 | 0.5MP | 20059 | 2828x2828 | yes |
+| cugan-2x | 0.5MP | 31782 | 1414x1414 | yes |
+
+MP budgets unchanged from Task 2 defaults (4x <=2MP, 2x <=4MP).
