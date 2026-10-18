@@ -4,7 +4,8 @@
 
 | 入口            | 地址                                                               | 说明                                                                            |
 | --------------- | ------------------------------------------------------------------ | ------------------------------------------------------------------------------- |
-| 网页用户        | `https://squoosh.016666666.xyz` 或 `http://squoosh.mistorify.com/` | 原 Squoosh PWA，浏览器 WASM 本地压缩（两域名都可用）                            |
+| 网页用户        | `https://squoosh.016666666.xyz` 或 `http://squoosh.mistorify.com/` | 原 Squoosh PWA，浏览器 WASM 本地压缩（两域名都可用）；顶部导航互通超分          |
+| 网页超分        | `https://squoosh.016666666.xyz/upscale`                            | bg2x 静态嵌入（已换标为 Squoosh，见“网页超分”一节），浏览器 ONNX 推理           |
 | MCP（AI Agent） | `https://squoosh.016666666.xyz/mcp`                                | JSON-RPC + SSE，8 工具（必须用此域名；mistorify 有 Bot 挑战，程序调用会被 403） |
 | 本地 MCP        | `mcp-local/`（stdio，本机运行）                                    | 直接读本地文件路径，零云成本                                                    |
 | 压缩后端        | Render Node 服务（sharp）                                          | Worker 队列/同步调用                                                            |
@@ -236,6 +237,19 @@ SSE（可选）：`GET https://squoosh.016666666.xyz/mcp/sse`。
 - 原有 `src/`、`codecs/` 未改动。
 
 ## Upscale (AI super-resolution)
+
+### 网页超分（/upscale）
+
+bg2x（MIT）静态构建嵌入，**已全量换标为 Squoosh**：logo/名称/标题/三语Copy
+换成 Squoosh，GitHub 链接指本仓库，相关推荐指向本站，**对方的数据上报
+tracker 已删除**，MIT 署名保留在 `NOTICE-bg2x.md`。
+重建：`bash scripts/build-upscale.sh <bg2x-checkout>`（补丁带 assert，
+上游变了会 loud fail；注意先跑 `npm run build` 再跑它，因为前者会清空
+`build/`）。限制：27MB 的 ORT wasm 超过 Workers 25MB 单文件上限，
+以 `.partNN` 切块存放，Worker 流式拼装（sha256 已验证一致）；
+`/upscale/*` 刻意不加 COOP/COEP（跟官方一致，单线程 wasm）。
+
+### MCP / 本地超分
 
 Two editions, same tool names where it matters:
 
