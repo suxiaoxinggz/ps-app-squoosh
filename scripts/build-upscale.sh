@@ -23,10 +23,10 @@ s = open(p).read()
 if 'Compress images with Squoosh' not in s:
     old = "          <Github />\n        </a>\n      </div>"
     new = ("          <Github />\n        </a>\n"
-           "        <a\n          class=\"icon-btn\"\n          href=\"/\"\n"
-           "          :title=\"'Compress'\"\n          aria-label=\"Compress images with Squoosh\"\n"
-           "        >\n          <span style=\"font-size:12px;font-weight:600\">ZIP</span>\n"
-           "        </a>\n      </div>")
+           "        <a\n          href=\"/\"\n          title=\"Compress\"\n"
+           "          aria-label=\"Compress images with Squoosh\"\n"
+           "          style=\"white-space:nowrap;margin:0 8px 0 2px;padding:7px 14px;border-radius:999px;background:var(--primary,#c2410c);color:#fff;font-size:13px;font-weight:600;text-decoration:none;line-height:1\"\n"
+           "        >Compress</a>\n      </div>")
     assert old in s
     open(p, 'w').write(s.replace(old, new))
     print('header back-link patched')
@@ -134,6 +134,7 @@ for f in "$OLDPWD/build/upscale/_astro"/*.wasm; do
   fi
 done
 echo "upscale build copied to $OLDPWD/build/upscale"
+echo "NOTE: run this AFTER \"npm run build\" (which wipes build/); never before."
 
 # _headers override so /upscale/* is never cross-origin isolated (match upstream).
 if ! grep -q "upscale/\*" "$OLDPWD/build/_headers" 2>/dev/null; then

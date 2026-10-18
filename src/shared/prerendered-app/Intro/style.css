@@ -19,6 +19,34 @@
   display: none;
 }
 
+.topnav {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  gap: 0.4rem;
+  margin-top: 1.2rem;
+  padding: 0.3rem;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.55);
+}
+
+.topnav-link,
+.topnav-active {
+  padding: 0.45rem 1.1rem;
+  border-radius: 999px;
+  font-size: 1rem;
+  text-decoration: none;
+}
+
+.topnav-link {
+  color: var(--dim-text);
+}
+
+.topnav-active {
+  background: var(--hot-pink);
+  color: #fff;
+}
+
 .main {
   min-height: 541px;
   display: grid;

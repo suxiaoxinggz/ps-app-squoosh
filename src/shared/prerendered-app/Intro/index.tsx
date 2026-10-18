@@ -234,6 +234,14 @@ export default class Intro extends Component<Props, State> {
           onChange={this.onFileChange}
         />
         <div class={style.main}>
+          <nav class={style.topnav}>
+            <a class={style.topnavActive} href="/">
+              Compress
+            </a>
+            <a class={style.topnavLink} href="/upscale">
+              AI Upscale
+            </a>
+          </nav>
           {!__PRERENDER__ && (
             <canvas
               ref={linkRef(this, 'blobCanvas')}
