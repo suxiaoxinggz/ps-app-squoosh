@@ -57,9 +57,12 @@ sub('src/components/AppHeader.vue', [
   ('<span class="logo-text">bg2x</span>', '<span class="logo-text">Squoosh</span>'),
   ('href="https://github.com/isixe/bg2x"', 'href="https://github.com/suxiaoxinggz/ps-app-squoosh"'),
 ])
-sub('src/components/HomePage.vue', [
-  ('<img src="/favicon.png" alt="bg2x" class="welcome-logo" />', '<img src="/favicon.png" alt="Squoosh" class="welcome-logo" />'),
-])
+for _f in ['src/components/AppHeader.vue', 'src/components/HomePage.vue', 'src/components/SettingsView.vue']:
+    with open(_f) as fh:
+        _s = fh.read()
+    with open(_f, 'w') as fh:
+        fh.write(_s.replace('src="/favicon.png"', 'src="/upscale/favicon.png"'))
+print('img src paths fixed')
 sub('src/pages/index.astro', [('<Layout title="bg2x">', '<Layout title="Squoosh Upscale">')])
 sub('src/pages/[...view].astro', [('`bg2x - ${pageTitle}`', '`Squoosh - ${pageTitle}`'), (": 'bg2x';", ": 'Squoosh Upscale';")])
 sub('src/layouts/Layout.astro', [
