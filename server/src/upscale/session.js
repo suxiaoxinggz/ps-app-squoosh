@@ -3,7 +3,8 @@ import path from 'node:path';
 import ort from 'onnxruntime-node';
 import { MODELS, findModel } from './models.js';
 
-const CACHE_DIR = path.resolve('./.model-cache');
+const CACHE_DIR =
+  process.env.SQUOOSH_MODEL_CACHE || path.resolve('./.model-cache');
 const SESSION_TIMEOUT_MS = 60_000;
 
 const sessions = new Map();
@@ -48,9 +49,9 @@ export function getLoadedModels() {
   return [...sessions.keys()];
 }
 
-export async function getSession(modelId) {
+export async function getSession(modelId, extraModels = []) {
   if (sessions.has(modelId)) return sessions.get(modelId);
-  const m = findModel(modelId);
+  const m = extraModels.find((x) => x.id === modelId) || findModel(modelId);
   if (!m)
     throw new Error(
       `unknown model ${modelId}. Available: ${MODELS.map((x) => x.id).join(', ')}`,

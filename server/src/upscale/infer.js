@@ -9,17 +9,24 @@ import {
   blendTile,
   downsampleTile,
 } from './tiling.js';
-import { findModel } from './models.js';
+import { MODELS } from './models.js';
 import { getSession } from './session.js';
 
 const MAX_OUTPUT_DIM = 8000;
 const MAX_OUTPUT_PIXELS = 50_000_000;
 
-async function _inferUpscale({ imageBase64, model, targetScale }) {
-  const m = findModel(model);
+async function _inferUpscale({
+  imageBase64,
+  model,
+  targetScale,
+  models = [],
+  limits = {},
+}) {
+  const all = [...MODELS, ...models];
+  const m = all.find((x) => x.id === model);
   if (!m)
     throw new Error(
-      `unknown model ${model}. Available: ${['general-x4v3', 'anime-v3', 'cugan-2x', 'swin-light-x2'].join(', ')}`,
+      `unknown model ${model}. Available: ${all.map((x) => x.id).join(', ')}`,
     );
   const buf = Buffer.from(
     imageBase64.replace(/^data:[^;]+;base64,/, ''),
@@ -38,7 +45,7 @@ async function _inferUpscale({ imageBase64, model, targetScale }) {
   const imageData = { data, width, height };
   const mp = (width * height) / 1e6;
   const scale = m.scale;
-  const limit = scale === 4 ? 2 : 4;
+  const limit = limits.maxInputMp ?? (scale === 4 ? 2 : 4);
   if (mp > limit) {
     throw new Error(
       `input too large (${mp.toFixed(2)}MP). ${scale}x models accept <=${limit}MP. Use local edition for larger images.`,
@@ -52,22 +59,18 @@ async function _inferUpscale({ imageBase64, model, targetScale }) {
   const blendH = height * blendScale;
   const outW = width * ts;
   const outH = height * ts;
-  if (
-    blendW > MAX_OUTPUT_DIM ||
-    blendH > MAX_OUTPUT_DIM ||
-    blendW * blendH > MAX_OUTPUT_PIXELS
-  )
+  const maxDim = limits.maxOutputDim ?? MAX_OUTPUT_DIM;
+  const maxPx = limits.maxOutputMp
+    ? limits.maxOutputMp * 1e6
+    : MAX_OUTPUT_PIXELS;
+  if (blendW > maxDim || blendH > maxDim || blendW * blendH > maxPx)
     throw new Error('output too large');
   if (outW !== blendW || outH !== blendH) {
-    if (
-      outW > MAX_OUTPUT_DIM ||
-      outH > MAX_OUTPUT_DIM ||
-      outW * outH > MAX_OUTPUT_PIXELS
-    )
+    if (outW > maxDim || outH > maxDim || outW * outH > maxPx)
       throw new Error('output too large');
   }
   const outData = new Uint8ClampedArray(blendW * blendH * 4);
-  const session = await getSession(model);
+  const session = await getSession(model, models);
   const inputName = session.inputNames[0];
   const outputName = session.outputNames[0];
   const tilesX = Math.max(1, Math.ceil((width - TILE_OVERLAP) / TILE_STEP));
@@ -142,11 +145,18 @@ async function _inferUpscale({ imageBase64, model, targetScale }) {
 // Single-tile inference endpoint support: runs ONE tile and returns its raw
 // output patch as a small PNG, so a caller (worker) can stitch patches.
 // Keeps per-request native memory at single-tile level.
-export async function inferTilePatch({ imageBase64, model, x0, y0 }) {
-  const m = findModel(model);
+export async function inferTilePatch({
+  imageBase64,
+  model,
+  x0,
+  y0,
+  models = [],
+}) {
+  const all = [...MODELS, ...models];
+  const m = all.find((x) => x.id === model);
   if (!m)
     throw new Error(
-      `unknown model ${model}. Available: ${['general-x4v3', 'anime-v3', 'cugan-2x', 'swin-light-x2'].join(', ')}`,
+      `unknown model ${model}. Available: ${all.map((x) => x.id).join(', ')}`,
     );
   const buf = Buffer.from(
     imageBase64.replace(/^data:[^;]+;base64,/, ''),
@@ -163,7 +173,7 @@ export async function inferTilePatch({ imageBase64, model, x0, y0 }) {
   const scale = m.scale;
   const tileBuffer = new Float32Array(3 * TILE_SIZE * TILE_SIZE);
   extractTile(imageData, x0, y0, tileBuffer);
-  const session = await getSession(model);
+  const session = await getSession(model, models);
   const inputName = session.inputNames[0];
   const outputName = session.outputNames[0];
   const tileTensor = new ort.Tensor('float32', tileBuffer, [

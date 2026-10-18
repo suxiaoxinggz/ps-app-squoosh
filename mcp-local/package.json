@@ -3,7 +3,14 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "bin": { "squoosh-mcp-local": "src/server.js" },
-  "scripts": { "start": "node src/server.js" },
-  "dependencies": { "sharp": "^0.33.5" }
+  "bin": {
+    "squoosh-mcp-local": "src/server.js"
+  },
+  "scripts": {
+    "start": "node src/server.js"
+  },
+  "dependencies": {
+    "sharp": "^0.33.5",
+    "onnxruntime-node": "^1.30.0"
+  }
 }

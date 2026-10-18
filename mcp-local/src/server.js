@@ -161,6 +161,32 @@ const TOOLS = [
       openWorldHint: false,
     },
   },
+  {
+    name: 'upscale',
+    description:
+      'AI super-resolution of a local image (all 10 models, incl. x4plus). Writes a PNG. No MP cap (warns over 50MP output).',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        path: { type: 'string', description: 'Local input image path' },
+        model: { type: 'string', description: 'Default general-x4v3' },
+        targetScale: {
+          type: 'number',
+          description: 'Downscale output, must divide model scale',
+        },
+        output: {
+          type: 'string',
+          description: 'Output PNG path (default: <input>.upscaled.png)',
+        },
+      },
+      required: ['path'],
+    },
+    annotations: {
+      readOnlyHint: false,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
+  },
 ];
 
 async function callTool(name, args) {
@@ -220,6 +246,44 @@ async function callTool(name, args) {
       }
     }
     return { items: out };
+  }
+  if (name === 'upscale') {
+    const { findLocalModel, LOCAL_EXTRA_MODELS } =
+      await import('./upscale-models.js');
+    const { inferUpscale } = await import('../../server/src/upscale/infer.js');
+    const model = args.model || 'general-x4v3';
+    if (!findLocalModel(model)) {
+      throw new Error(
+        `unknown model "${model}". Available: ${['general-x4v3', 'anime-v3', 'cugan-2x', 'swin-light-x2', ...LOCAL_EXTRA_MODELS.map((m) => m.id)].join(', ')}`,
+      );
+    }
+    const input = fs.readFileSync(args.path);
+    const meta = await sharp(args.path).metadata();
+    const mp = ((meta.width || 0) * (meta.height || 0)) / 1e6;
+    const out =
+      args.output || args.path.replace(/\.[^.]*$/, '') + '.upscaled.png';
+    const r = await inferUpscale({
+      imageBase64: input.toString('base64'),
+      model,
+      targetScale: args.targetScale,
+      models: LOCAL_EXTRA_MODELS,
+      limits: { maxInputMp: 1e9, maxOutputMp: 1e9, maxOutputDim: 1e9 },
+    });
+    if (mp * (args.targetScale || findLocalModel(model).scale) ** 2 > 50) {
+      console.error(
+        `warning: output over 50MP — slow and memory-heavy, continuing anyway`,
+      );
+    }
+    fs.writeFileSync(out, Buffer.from(r.base64, 'base64'));
+    return {
+      path: args.path,
+      output: out,
+      size: fs.statSync(out).size,
+      width: r.width,
+      height: r.height,
+      model,
+      before: input.length,
+    };
   }
   throw new Error(`unknown tool "${name}"`);
 }

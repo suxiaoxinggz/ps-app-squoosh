@@ -38,6 +38,8 @@ for (const t of [
   'smart_compress',
   'get_image_info',
   'list_formats',
+  'upscale_image',
+  'smart_upscale',
 ]) {
   check(`tool:${t}`, tools.includes(t));
 }
@@ -75,6 +77,35 @@ if (sc?.jobId && !sc.sync) {
     await new Promise((r) => setTimeout(r, 3000));
   }
   if (!sc.sync) check('poll-timeout', done);
+}
+
+// Upscale: tiny image should take the sync fast path (or queue briefly).
+const uc = await rpc('tools/call', {
+  name: 'smart_upscale',
+  arguments: { source: { type: 'base64', value: IMG } },
+});
+const us = uc.result?.structuredContent;
+check('smart_upscale', !!us?.jobId, `sync=${us?.sync} status=${us?.status}`);
+if (us?.jobId && !us.sync) {
+  let udone = false;
+  for (let i = 0; i < 40; i++) {
+    const s = await rpc('tools/call', {
+      name: 'get_job_status',
+      arguments: { jobId: us.jobId },
+    });
+    const d = s.result?.structuredContent;
+    if (d?.status === 'done' || d?.status === 'error') {
+      udone = d.status === 'done';
+      check(
+        'upscale-done',
+        udone,
+        JSON.stringify(d?.items?.map((x) => x.size)),
+      );
+      break;
+    }
+    await new Promise((r) => setTimeout(r, 5000));
+  }
+  check('upscale-poll-timeout', udone);
 }
 
 if (failures) {

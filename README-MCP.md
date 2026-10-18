@@ -235,20 +235,26 @@ SSE（可选）：`GET https://squoosh.016666666.xyz/mcp/sse`。
 - CI：push 到 dev 自动跑 `worker/smoke.js`（`.github/workflows/smoke.yml`）。
 - 原有 `src/`、`codecs/` 未改动。
 
-## Upscale (experimental)
+## Upscale (AI super-resolution)
 
-Server-side ONNX upscaling via `/upscale` (gate-protected). Models: general-x4v3, anime-v3, cugan-2x, swin-light-x2.
+Two editions, same tool names where it matters:
 
-Calibration matrix (local Render-equivalent, synthetic inputs; wall ms incl. model warmup where noted):
+- **Remote** (`upscale_image`, `smart_upscale` on this MCP): 4-model whitelist
+  (general-x4v3 default, anime-v3, cugan-2x, swin-light-x2). Jobs are
+  **tile-sharded** — one queue message per 256px tile — because the free-tier
+  Render instance (512MB) hard-crashes on multi-tile single requests
+  (verified in production: 1 tile always survives, 4+ tiles in one request
+  kill the process). Worker stitches patches; output always PNG.
+  Small inputs (≤0.5MP) with `inline:true` return synchronously.
+- **Local** (`upscale` in `mcp-local/`, stdio): all 10 models incl. x4plus 67MB,
+  weights in `~/.cache/squoosh-models` (or `SQUOOSH_MODEL_CACHE`), no MP cap
+  (warns over 50MP output). Verified: 1024px photo → 4096px PNG via
+  general-x4v3 locally.
 
-| model | input | wall ms | result | success |
-| ----- | ----- | ------- | ------ | ------- |
-| general-x4v3 | 0.5MP | 6778 | 2828x2828 | yes |
-| general-x4v3 | 1MP | 15896 | 4000x4000 | yes |
-| general-x4v3 | 2MP | 21430 | 5656x5656 | yes |
-| swin-light-x2 | 1MP | 101366 | 2000x2000 | yes |
-| swin-light-x2 | 2MP | 111609 | 2828x2828 | yes |
-| anime-v3 | 0.5MP | 20059 | 2828x2828 | yes |
-| cugan-2x | 0.5MP | 31782 | 1414x1414 | yes |
+Worker-enforced budgets (single source of truth in code, not this doc):
+output ≤8000px per side and ≤8MP total. Over-budget fails fast with the
+measured reason instead of burning retries.
 
-MP budgets unchanged from Task 2 defaults (4x <=2MP, 2x <=4MP).
+Measured on production free Render (tile-sharded, per-tile wall ms):
+single tiles run ~13–24s each; a 0.5MP photo (12 tiles) completes in ~3–4 min
+including queue latency. Local Mac: 1024px → 25 tiles, peak RSS ~237MB.
