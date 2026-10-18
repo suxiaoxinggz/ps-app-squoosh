@@ -17,3 +17,5 @@ node_modules/
 server/.model-cache/
 vendor/
 .playwright-mcp/
+.model-cache/
+server/.model-cache/
