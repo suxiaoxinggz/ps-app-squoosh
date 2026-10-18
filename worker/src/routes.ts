@@ -858,5 +858,67 @@ export function registerRoutes(app: Hono<{ Bindings: Env }>, env: Env) {
     c.json({ error: `unknown mcp path: ${new URL(c.req.url).pathname}` }, 404),
   );
 
+  // NOTE: deliberately NO COOP/COEP headers (match upstream bg2x.itea.dev,
+  // which serves without them). Without cross-origin isolation onnxruntime-web
+  // falls back to single-threaded wasm for every user — slower than threaded
+  // but the only path proven across browsers (threaded init hangs in some
+  // environments; upstream documents Electron deadlocks for the same reason).
+  // Large ORT wasm (>25MB Workers asset limit) ships as <name>.partNN chunks;
+  // reassemble here as a stream (no buffering, no R2 dependency).
+  // Generic over the hashed filename so bg2x rebuilds keep working.
+  app.get('/upscale/_astro/:file', async (c) => {
+    const file = c.req.param('file');
+    if (!file.endsWith('.wasm')) return env.ASSETS.fetch(c.req.raw);
+    const origin = new URL(c.req.url).origin;
+    const streams: ReadableStream<Uint8Array>[] = [];
+    let total = 0;
+    for (let n = 0; n < 8; n++) {
+      const part = `${file}.part${String(n).padStart(2, '0')}`;
+      const r = await env.ASSETS.fetch(
+        new Request(`${origin}/upscale/_astro/${part}`, c.req.raw),
+      );
+      if (!r.ok || !r.body) break;
+      const len = Number(r.headers.get('content-length') || 0);
+      total += len;
+      streams.push(r.body as ReadableStream<Uint8Array>);
+    }
+    if (!streams.length) {
+      // No chunks: fall back to a whole asset (small wasm builds).
+      return env.ASSETS.fetch(c.req.raw);
+    }
+    const combined = new ReadableStream<Uint8Array>({
+      async start(controller) {
+        for (const s of streams) {
+          const r = s.getReader();
+          for (;;) {
+            const { done, value } = await r.read();
+            if (done) break;
+            controller.enqueue(value);
+          }
+          r.releaseLock();
+        }
+        controller.close();
+      },
+    });
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/wasm',
+      // no-transform: keep Cloudflare from zstd-compressing the stream;
+      // the ORT loader streaming-compiles it and any transform is a risk.
+      'Cache-Control': 'public, max-age=31536000, immutable, no-transform',
+      'Accept-Ranges': 'none',
+    };
+    if (total <= 0) total = 28312028; // known-good size; remove if build hash changes
+    headers['Content-Length'] = String(total);
+    return new Response(combined, { headers });
+  });
+  app.get('/upscale/*', async (c) => {
+    const res = await env.ASSETS.fetch(c.req.raw);
+    if (res.status !== 404) return res;
+    const url = new URL(c.req.url);
+    return env.ASSETS.fetch(
+      new Request(`${url.origin}/upscale/index.html`, c.req.raw),
+    );
+  });
+
   app.get('*', async (c) => env.ASSETS.fetch(c.req.raw));
 }

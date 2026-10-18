@@ -442,6 +442,9 @@ export default class Intro extends Component<Props, State> {
                 >
                   Privacy
                 </a>
+                <a class={style.footerLink} href="/upscale">
+                  AI Upscale
+                </a>
                 <a
                   class={style.footerLinkWithLogo}
                   href="https://github.com/GoogleChromeLabs/squoosh"
