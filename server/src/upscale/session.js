@@ -76,6 +76,10 @@ export async function getSession(modelId) {
       graphOptimizationLevel: 'all',
       intraOpNumThreads: 1,
       interOpNumThreads: 1,
+      // Disable ORT CPU memory arena + mem pattern: prevents native (off-heap)
+      // slab retention across runs on 512MB hosts. Trades speed for survival.
+      enableCpuMemArena: false,
+      enableMemPattern: false,
     }),
     SESSION_TIMEOUT_MS,
     'session create',
