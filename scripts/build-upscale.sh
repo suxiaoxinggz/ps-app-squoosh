@@ -60,3 +60,14 @@ for f in "$OLDPWD/build/upscale/_astro"/*.wasm; do
   fi
 done
 echo "upscale build copied to $OLDPWD/build/upscale"
+
+# _headers override so /upscale/* is never cross-origin isolated (match upstream).
+if ! grep -q "upscale/\*" "$OLDPWD/build/_headers" 2>/dev/null; then
+  cat >> "$OLDPWD/build/_headers" <<'HDR'
+
+# bg2x embed must NOT be isolated (match upstream: single-threaded wasm).
+/upscale/*
+  Cross-Origin-Opener-Policy: unsafe-none
+  Cross-Origin-Embedder-Policy: unsafe-none
+HDR
+fi

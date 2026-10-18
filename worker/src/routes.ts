@@ -863,59 +863,94 @@ export function registerRoutes(app: Hono<{ Bindings: Env }>, env: Env) {
   // falls back to single-threaded wasm for every user — slower than threaded
   // but the only path proven across browsers (threaded init hangs in some
   // environments; upstream documents Electron deadlocks for the same reason).
-  // Large ORT wasm (>25MB Workers asset limit) ships as <name>.partNN chunks;
-  // reassemble here as a stream (no buffering, no R2 dependency).
-  // Generic over the hashed filename so bg2x rebuilds keep working.
+  // Large ORT wasm (>25MB Workers asset limit) ships as <name>.partNN chunks.
+  // Served from ONE in-memory buffer with explicit Content-Length: some wasm
+  // loaders behave badly with chunked streaming. The buffer is fetched once
+  // per isolate and shared by concurrent requests; browsers cache it for a
+  // year afterwards, so steady-state cost is ~28MB per isolate.
+  const wasmCache = new Map<
+    string,
+    Promise<{ buf: ArrayBuffer; size: number } | null>
+  >();
+  function loadWasm(env: Env, origin: string, base: string) {
+    let hit = wasmCache.get(base);
+    if (!hit) {
+      hit = (async () => {
+        const parts: Uint8Array[] = [];
+        let total = 0;
+        for (let n = 0; n < 8; n++) {
+          const name = `${base}.wasm.part${String(n).padStart(2, '0')}`;
+          const r = await env.ASSETS.fetch(
+            new Request(`${origin}/upscale/_astro/${name}`),
+          );
+          if (!r.ok) break;
+          const b = new Uint8Array(await r.arrayBuffer());
+          if (!b.length) break;
+          parts.push(b);
+          total += b.length;
+        }
+        if (!parts.length) return null;
+        const buf = new Uint8Array(total);
+        let off = 0;
+        for (const p of parts) {
+          buf.set(p, off);
+          off += p.length;
+        }
+        return { buf: buf.buffer as ArrayBuffer, size: total };
+      })();
+      hit.catch(() => {
+        wasmCache.delete(base);
+      });
+      wasmCache.set(base, hit);
+      // A null result (no chunks) must not stick: evict on resolve-null.
+      hit.then((v) => {
+        if (!v) wasmCache.delete(base);
+      });
+    }
+    return hit;
+  }
   app.get('/upscale/_astro/:file', async (c) => {
     const file = c.req.param('file');
     if (!file.endsWith('.wasm')) return env.ASSETS.fetch(c.req.raw);
     const origin = new URL(c.req.url).origin;
-    const streams: ReadableStream<Uint8Array>[] = [];
-    let total = 0;
-    for (let n = 0; n < 8; n++) {
-      const part = `${file}.part${String(n).padStart(2, '0')}`;
-      const r = await env.ASSETS.fetch(
-        new Request(`${origin}/upscale/_astro/${part}`, c.req.raw),
-      );
-      if (!r.ok || !r.body) break;
-      const len = Number(r.headers.get('content-length') || 0);
-      total += len;
-      streams.push(r.body as ReadableStream<Uint8Array>);
-    }
-    if (!streams.length) {
-      // No chunks: fall back to a whole asset (small wasm builds).
-      return env.ASSETS.fetch(c.req.raw);
-    }
-    const combined = new ReadableStream<Uint8Array>({
-      async start(controller) {
-        for (const s of streams) {
-          const r = s.getReader();
-          for (;;) {
-            const { done, value } = await r.read();
-            if (done) break;
-            controller.enqueue(value);
-          }
-          r.releaseLock();
-        }
-        controller.close();
+    // Prefer exact-name chunks, fall back to any same-prefix chunks so future
+    // bg2x rebuilds (new hashes) keep working without code changes.
+    const hit =
+      (await loadWasm(env, origin, file.replace(/\.wasm$/, ''))) ||
+      (await loadWasm(env, origin, 'ort-wasm-simd-threaded.jsep-MDYUKy93'));
+    if (!hit) return env.ASSETS.fetch(c.req.raw);
+    return new Response(hit.buf.slice(0), {
+      headers: {
+        'Content-Type': 'application/wasm',
+        'Content-Length': String(hit.size),
+        'Cache-Control': 'public, max-age=31536000, immutable, no-transform',
       },
     });
-    const headers: Record<string, string> = {
-      'Content-Type': 'application/wasm',
-      // no-transform: keep Cloudflare from zstd-compressing the stream;
-      // the ORT loader streaming-compiles it and any transform is a risk.
-      'Cache-Control': 'public, max-age=31536000, immutable, no-transform',
-      'Accept-Ranges': 'none',
-    };
-    if (total <= 0) total = 28312028; // known-good size; remove if build hash changes
-    headers['Content-Length'] = String(total);
-    return new Response(combined, { headers });
   });
+  // /upscale (bg2x embed) must NOT be cross-origin isolated: match upstream
+  // bg2x.itea.dev, which serves without COOP/COEP, so onnxruntime-web falls
+  // back to single-threaded wasm for every user. (Threaded init hangs in
+  // several environments; upstream documents Electron deadlocks.)
+  // The repo's build/_headers sets COOP+COEP on /*, so strip them here.
+  // NOTE: keep this ahead of the SPA fallback below.
+  async function upscaleAsset(c: any, req: Request): Promise<Response> {
+    const res = await env.ASSETS.fetch(req);
+    const headers = new Headers(res.headers);
+    headers.delete('Cross-Origin-Opener-Policy');
+    headers.delete('Cross-Origin-Embedder-Policy');
+    return new Response(res.body, {
+      status: res.status,
+      statusText: res.statusText,
+      headers,
+    });
+  }
+  app.get('/upscale', async (c) => upscaleAsset(c, c.req.raw));
   app.get('/upscale/*', async (c) => {
-    const res = await env.ASSETS.fetch(c.req.raw);
+    const res = await upscaleAsset(c, c.req.raw);
     if (res.status !== 404) return res;
     const url = new URL(c.req.url);
-    return env.ASSETS.fetch(
+    return upscaleAsset(
+      c,
       new Request(`${url.origin}/upscale/index.html`, c.req.raw),
     );
   });
