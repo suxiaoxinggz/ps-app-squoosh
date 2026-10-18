@@ -9,8 +9,9 @@
     "dev": "node src/index.js"
   },
   "dependencies": {
-    "express": "^4.19.2",
     "cors": "^2.8.5",
+    "express": "^4.19.2",
+    "onnxruntime-node": "^1.30.0",
     "sharp": "^0.33.5"
   }
 }
