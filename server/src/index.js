@@ -1,7 +1,7 @@
 import express from 'express';
 import cors from 'cors';
 import sharp from 'sharp';
-import { MODELS, inferUpscale } from './upscale/index.js';
+import { MODELS, inferUpscale, inferTile } from './upscale/index.js';
 import { getLoadedModels } from './upscale/session.js';
 sharp.cache(false);
 sharp.concurrency(1);
@@ -153,6 +153,20 @@ app.post('/upscale', gate, async (req, res) => {
         error: `unknown model "${model}". Available: ${MODELS.map((x) => x.id).join(', ')}`,
       });
     const out = await inferUpscale({ imageBase64, model, targetScale });
+    res.json(out);
+    if (global.gc) global.gc();
+  } catch (e) {
+    res.status(400).json({ error: e?.message || String(e) });
+  }
+});
+
+app.post('/upscale/tile', gate, async (req, res) => {
+  try {
+    const { imageBase64, model, x0 = 0, y0 = 0 } = req.body || {};
+    if (!imageBase64)
+      return res.status(400).json({ error: 'imageBase64 required.' });
+    if (!model) return res.status(400).json({ error: 'model required.' });
+    const out = await inferTile({ imageBase64, model, x0, y0 });
     res.json(out);
     if (global.gc) global.gc();
   } catch (e) {

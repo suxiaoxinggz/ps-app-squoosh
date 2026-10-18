@@ -30,7 +30,6 @@ async function _inferUpscale({ imageBase64, model, targetScale }) {
   const height = meta.height;
   const mp = (width * height) / 1e6;
   const scale = m.scale;
-  // MP budget: 4x models <=2MP, 2x models <=4MP
   const limit = scale === 4 ? 2 : 4;
   if (mp > limit) {
     throw new Error(
@@ -110,10 +109,8 @@ async function _inferUpscale({ imageBase64, model, targetScale }) {
       }
     }
   }
-  // encode PNG
   let pngBuf;
   if (outW !== blendW || outH !== blendH) {
-    // resize via sharp
     const stitched = await sharp(Buffer.from(outData), {
       raw: { width: blendW, height: blendH, channels: 4 },
     })
@@ -139,6 +136,59 @@ async function _inferUpscale({ imageBase64, model, targetScale }) {
   };
 }
 
+// Single-tile inference endpoint support: runs ONE tile and returns its raw
+// output patch as a small PNG, so a caller (worker) can stitch patches.
+// Keeps per-request native memory at single-tile level.
+export async function inferTilePatch({ imageBase64, model, x0, y0 }) {
+  const m = findModel(model);
+  if (!m)
+    throw new Error(
+      `unknown model ${model}. Available: ${['general-x4v3', 'anime-v3', 'cugan-2x', 'swin-light-x2'].join(', ')}`,
+    );
+  const buf = Buffer.from(
+    imageBase64.replace(/^data:[^;]+;base64,/, ''),
+    'base64',
+  );
+  const meta = await sharp(buf).metadata();
+  const width = meta.width;
+  const height = meta.height;
+  const { data } = await sharp(buf)
+    .ensureAlpha()
+    .raw()
+    .toBuffer({ resolveWithObject: true });
+  const imageData = { data, width, height };
+  const scale = m.scale;
+  const tileBuffer = new Float32Array(3 * TILE_SIZE * TILE_SIZE);
+  extractTile(imageData, x0, y0, tileBuffer);
+  const session = await getSession(model);
+  const inputName = session.inputNames[0];
+  const outputName = session.outputNames[0];
+  const tileTensor = new ort.Tensor('float32', tileBuffer, [
+    1,
+    3,
+    TILE_SIZE,
+    TILE_SIZE,
+  ]);
+  const tileOut = await session.run({ [inputName]: tileTensor });
+  const raw = tileOut[outputName].data;
+  const ow = TILE_SIZE * scale;
+  const oh = TILE_SIZE * scale;
+  const patch = await sharp(Buffer.from(new Uint8Array(raw.buffer)), {
+    raw: { width: ow, height: oh, channels: 3 },
+  })
+    .png()
+    .toBuffer();
+  if (global.gc) global.gc();
+  return {
+    base64: patch.toString('base64'),
+    mime: 'image/png',
+    x0,
+    y0,
+    ow,
+    oh,
+  };
+}
+
 function withTimeout(promise, ms, label) {
   return new Promise((resolve, reject) => {
     const t = setTimeout(
@@ -161,4 +211,8 @@ function withTimeout(promise, ms, label) {
 
 export async function inferUpscale(args) {
   return withTimeout(_inferUpscale(args), 300000, 'upscale');
+}
+
+export async function inferTile(args) {
+  return withTimeout(inferTilePatch(args), 60000, 'upscale-tile');
 }
