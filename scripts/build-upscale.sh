@@ -33,6 +33,77 @@ if 'Compress images with Squoosh' not in s:
 else:
     print('header back-link already patched')
 PY
+# ---- Rebrand bg2x -> Squoosh (build-area only, upstream untouched) ----
+# Logo: caller may drop a squoosh icon at $SQUOOSH_ICON to replace favicon.
+if [ -n "${SQUOOSH_ICON:-}" ] && [ -f "$SQUOOSH_ICON" ]; then
+  cp "$SQUOOSH_ICON" public/favicon.png
+fi
+python3 - <<'PYEOF'
+import re
+def sub(path, pairs):
+    s = open(path).read()
+    for old, new in pairs:
+        assert old in s, f'{path}: MISSING {old[:60]}'
+        s = s.replace(old, new)
+    open(path, 'w').write(s)
+
+sub('src/config/app.ts', [
+  ("export const APP_NAME = 'bg2x';", "export const APP_NAME = 'Squoosh';"),
+  ("export const GITHUB_REPO = 'isixe/bg2x';", "export const GITHUB_REPO = 'suxiaoxinggz/ps-app-squoosh';"),
+  ("export const HOMEPAGE_URL = 'https://bg2x.itea.dev/';", "export const HOMEPAGE_URL = 'https://squoosh.016666666.xyz/upscale/';"),
+])
+sub('src/components/AppHeader.vue', [
+  ('<img src="/favicon.png" alt="bg2x" class="logo-img" />', '<img src="/favicon.png" alt="Squoosh" class="logo-img" />'),
+  ('<span class="logo-text">bg2x</span>', '<span class="logo-text">Squoosh</span>'),
+  ('href="https://github.com/isixe/bg2x"', 'href="https://github.com/suxiaoxinggz/ps-app-squoosh"'),
+])
+sub('src/components/HomePage.vue', [
+  ('<img src="/favicon.png" alt="bg2x" class="welcome-logo" />', '<img src="/favicon.png" alt="Squoosh" class="welcome-logo" />'),
+])
+sub('src/pages/index.astro', [('<Layout title="bg2x">', '<Layout title="Squoosh Upscale">')])
+sub('src/pages/[...view].astro', [('`bg2x - ${pageTitle}`', '`Squoosh - ${pageTitle}`'), (": 'bg2x';", ": 'Squoosh Upscale';")])
+sub('src/layouts/Layout.astro', [
+  ("description = 'bg2x - AI-powered image super resolution tool',", "description = 'Squoosh AI image super resolution (upscale) tool',"),
+  ("'bg2x, AI image upscaling,", "'Squoosh, AI image upscaling,"),
+])
+sub('src/components/SettingsView.vue', [
+  ('bgx: Eraser,\n  imageDash: Images,', ''),
+])
+# Drop upstream analytics tracker + repoint related tab at our own links.
+p57='src/layouts/Layout.astro'
+s57=open(p57).read()
+i=s57.index('    <script is:inline>')
+j=s57.index('  </head>')
+assert 'analytics.itea.dev' in s57[i:j]
+s57=s57[:i]+s57[j:]
+open(p57,'w').write(s57)
+p58='src/config/related.ts'
+s58=open(p58).read()
+i58=s58.index('export const RELATED_PROJECTS')
+s58=s58[:i58]+"""export const RELATED_PROJECTS: RelatedProject[] = [
+  { name: 'Squoosh Compress', url: '/', i18nKey: 'squooshCompress', favicon: '/favicon.png' },
+  { name: 'Squoosh on GitHub', url: 'https://github.com/suxiaoxinggz/ps-app-squoosh', i18nKey: 'squooshGithub', favicon: '/favicon.png' },
+];
+"""
+open(p58,'w').write(s58)
+p59='src/components/SettingsView.vue'
+s59=open(p59).read()
+s59=re.sub(r'const RELATED_ICONS[^;]*?\};', 'const RELATED_ICONS: Record<string, Component> = {};', s59, flags=re.S)
+s59=s59.replace("  Scale,\n  Eraser,\n  Images,\n", "  Scale,\n")
+open(p59,'w').write(s59)
+for loc, items in [('src/locales/en.json', ('"squooshCompress": "Compress and convert images.",\n      "squooshGithub": "Source code on GitHub."')), ('src/locales/zh.json', ('"squooshCompress": "压缩与转换图片。",\n      "squooshGithub": "GitHub 源码。"')), ('src/locales/ja.json', ('"squooshCompress": "画像を圧縮・変換する。",\n      "squooshGithub": "GitHub のソースコード。"'))]:
+    sl=open(loc).read()
+    sl=re.sub(r'"bgx": "[^"]*",\n      "imageDash": "[^"]*"', items, sl)
+    open(loc,'w').write(sl)
+print('related+tracker patches staged')
+for loc in ['src/locales/en.json', 'src/locales/zh.json', 'src/locales/ja.json']:
+    s = open(loc).read()
+    s = s.replace('"title": "bg2x"', '"title": "Squoosh"')
+    s = re.sub(r'"aboutDesc": "bg2x', '"aboutDesc": "Squoosh', s)
+    open(loc, 'w').write(s)
+print('rebrand patches applied')
+PYEOF
+
 cat > astro.upscale.config.mjs <<'EOF'
 // @ts-check
 // Build-area only: serves bg2x under /upscale on the Squoosh worker.
