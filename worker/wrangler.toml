@@ -1,6 +1,6 @@
 name = "squoosh-mcp"
 main = "src/index.ts"
-compatibility_date = "2024-11-01"
+compatibility_date = "2025-09-01"
 compatibility_flags = ["nodejs_compat"]
 
 [assets]
@@ -23,4 +23,27 @@ queue = "squoosh-jobs"
 queue = "squoosh-jobs"
 max_batch_size = 1
 max_batch_timeout = 5
-max_concurrency = 20
+max_concurrency = 2
+dead_letter_queue = "squoosh-dlq"
+
+# Staging environment (verify here before touching prod)
+[env.staging]
+name = "squoosh-mcp-staging"
+
+[[env.staging.r2_buckets]]
+binding = "BUCKET"
+bucket_name = "squoosh-tmp-staging"
+
+[[env.staging.kv_namespaces]]
+binding = "JOBS"
+id = "3d9fcd6e92f140b59a20f0f54d824299"
+
+[[env.staging.queues.producers]]
+binding = "QUEUE"
+queue = "squoosh-jobs-staging"
+
+[[env.staging.queues.consumers]]
+queue = "squoosh-jobs-staging"
+max_batch_size = 1
+max_batch_timeout = 5
+max_concurrency = 2

@@ -4,6 +4,7 @@ export interface Env {
   JOBS: KVNamespace;
   QUEUE: Queue<any>;
   RENDER_URL?: string;
+  RENDER_SECRET?: string;
 }
 
 export interface JobItem {

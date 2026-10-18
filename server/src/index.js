@@ -8,6 +8,43 @@ app.use(express.json({ limit: '50mb' }));
 
 app.get('/health', (req, res) => res.json({ ok: true }));
 
+// Shared-secret gate for backend endpoints. Soft-enabled: enforced only
+// once RENDER_SECRET is set, so existing deploys keep working.
+function gate(req, res, next) {
+  if (
+    process.env.RENDER_SECRET &&
+    req.headers['x-render-secret'] !== process.env.RENDER_SECRET
+  ) {
+    return res
+      .status(401)
+      .json({ error: 'unauthorized. Call via the Cloudflare Worker gateway.' });
+  }
+  next();
+}
+
+app.post('/metadata', gate, async (req, res) => {
+  try {
+    const { imageBase64 } = req.body || {};
+    if (!imageBase64)
+      return res.status(400).json({ error: 'imageBase64 required.' });
+    const buf = Buffer.from(
+      imageBase64.replace(/^data:[^;]+;base64,/, ''),
+      'base64',
+    );
+    const meta = await sharp(buf).metadata();
+    res.json({
+      width: meta.width,
+      height: meta.height,
+      format: meta.format,
+      size: buf.length,
+    });
+  } catch (e) {
+    res
+      .status(400)
+      .json({ error: `unreadable image: ${e?.message || String(e)}` });
+  }
+});
+
 const OPTION_SCHEMAS = {
   jpeg: {
     quality: { type: 'number', min: 1, max: 100, default: 80 },
@@ -35,32 +72,25 @@ app.get('/options/:format', (req, res) => {
   res.json({ format: f, schema: OPTION_SCHEMAS[f] });
 });
 
-app.post('/compress', async (req, res) => {
+app.post('/compress', gate, async (req, res) => {
   try {
     const { imageBase64, format = 'jpeg', options = {} } = req.body || {};
     if (!imageBase64)
-      return res
-        .status(400)
-        .json({
-          error:
-            'imageBase64 required. Send base64 (data-uri prefix optional).',
-        });
+      return res.status(400).json({
+        error: 'imageBase64 required. Send base64 (data-uri prefix optional).',
+      });
     if (!['jpeg', 'png', 'webp', 'avif'].includes(format))
-      return res
-        .status(400)
-        .json({
-          error: `unsupported format "${format}". Use jpeg|png|webp|avif.`,
-        });
+      return res.status(400).json({
+        error: `unsupported format "${format}". Use jpeg|png|webp|avif.`,
+      });
     const buf = Buffer.from(
       imageBase64.replace(/^data:[^;]+;base64,/, ''),
       'base64',
     );
     if (buf.length > 10 * 1024 * 1024)
-      return res
-        .status(413)
-        .json({
-          error: `image too large (${buf.length} bytes, max 10485760).`,
-        });
+      return res.status(413).json({
+        error: `image too large (${buf.length} bytes, max 10485760).`,
+      });
     let pipeline = sharp(buf);
     if (options.width || options.height)
       pipeline = pipeline.resize(options.width, options.height);

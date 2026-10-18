@@ -3,11 +3,12 @@ import type { Env } from './types';
 import {
   ownerTokenFromAuth,
   readSource,
-  createQueuedJob,
-  processJobSync,
+  submitJob,
+  getImageInfo,
   listFormats,
   getOptionSchema,
   checkRateLimit,
+  jobItemsForClient,
 } from './services';
 
 const TOOL_DEFS = [
@@ -40,7 +41,7 @@ const TOOL_DEFS = [
   {
     name: 'list_formats',
     description:
-      'List actually supported output formats with label, mime, extension, and engine. Only these ids are accepted by compress/batch_compress.',
+      'List actually supported output formats with label, mime, extension, and engine. Only these ids are accepted by compress/batch_compress/smart_compress.',
     inputSchema: { type: 'object', properties: {} },
     outputSchema: {
       type: 'object',
@@ -77,17 +78,14 @@ const TOOL_DEFS = [
       properties: {
         format: {
           type: 'string',
-          description: 'Format id, e.g. jpeg, png, webp, avif',
+          description: 'Format id: jpeg, png, webp, avif',
         },
       },
       required: ['format'],
     },
     outputSchema: {
       type: 'object',
-      properties: {
-        format: { type: 'string' },
-        schema: { type: 'object' },
-      },
+      properties: { format: { type: 'string' }, schema: { type: 'object' } },
       required: ['format', 'schema'],
     },
     annotations: {
@@ -98,9 +96,85 @@ const TOOL_DEFS = [
     },
   },
   {
+    name: 'get_image_info',
+    description:
+      'Inspect an image before compressing: returns {size, mime, width, height, format}. Use it to decide target format and resize dimensions.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        source: {
+          type: 'object',
+          description: '{type:"base64"|"url"|"r2", value}',
+        },
+      },
+      required: ['source'],
+    },
+    outputSchema: {
+      type: 'object',
+      properties: {
+        size: { type: 'number' },
+        mime: { type: 'string' },
+        width: { type: 'number' },
+        height: { type: 'number' },
+        format: { type: 'string' },
+      },
+      required: ['size', 'mime'],
+    },
+    annotations: {
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: true,
+    },
+  },
+  {
+    name: 'smart_compress',
+    description:
+      'One-call smart compression with good defaults (webp, quality 80). Small images return immediately with status done; larger ones queue like compress. For full control use compress/batch_compress.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        source: { type: 'object' },
+        r2Key: {
+          type: 'string',
+          description: 'Alternative to source (from upload_image)',
+        },
+        format: {
+          type: 'string',
+          description: 'Default webp. jpeg|png|webp|avif.',
+        },
+        options: { type: 'object', description: 'Default {"quality":80}.' },
+        inline: {
+          type: 'boolean',
+          description: 'If true and result <=2MB, base64 is returned inline.',
+        },
+        idempotencyKey: {
+          type: 'string',
+          description: 'Client key: retries return the same jobId.',
+        },
+      },
+      required: ['source'],
+    },
+    outputSchema: {
+      type: 'object',
+      properties: {
+        jobId: { type: 'string' },
+        sync: { type: 'boolean' },
+        status: { type: 'string' },
+      },
+      required: ['jobId', 'sync', 'status'],
+    },
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: true,
+    },
+  },
+  {
     name: 'compress',
     description:
-      'Compress ONE image asynchronously. Returns {jobId}; poll get_job_status until status is done, then download item urls. Example: {"source":{"type":"base64","value":"..."},"format":"webp","options":{"quality":80}}.',
+      'Compress ONE image. Small images (<=2MB) return immediately with status done; larger ones queue — poll get_job_status. Set inline:true to get base64 back directly (<=2MB results only). Example: {"source":{"type":"base64","value":"..."},"format":"webp","options":{"quality":80}}.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -120,15 +194,23 @@ const TOOL_DEFS = [
         },
         inline: {
           type: 'boolean',
-          description: 'Ignored (always R2 URL). Kept for compat.',
+          description: 'If true and result <=2MB, base64 is returned inline.',
+        },
+        idempotencyKey: {
+          type: 'string',
+          description: 'Client key: retries return the same jobId.',
         },
       },
       required: ['source'],
     },
     outputSchema: {
       type: 'object',
-      properties: { jobId: { type: 'string' } },
-      required: ['jobId'],
+      properties: {
+        jobId: { type: 'string' },
+        sync: { type: 'boolean' },
+        status: { type: 'string' },
+      },
+      required: ['jobId', 'sync', 'status'],
     },
     annotations: {
       readOnlyHint: false,
@@ -140,7 +222,7 @@ const TOOL_DEFS = [
   {
     name: 'batch_compress',
     description:
-      'Compress MULTIPLE images in one async job (max 20 items). Returns {jobId}; poll get_job_status for per-item urls. Each item: {source|r2Key, format?, options?}.',
+      'Compress MULTIPLE images in one async job (max 20 items, always queued). Returns {jobId}; poll get_job_status for per-item urls. Each item: {source|r2Key, format?, options?}.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -148,14 +230,18 @@ const TOOL_DEFS = [
           type: 'array',
           description: 'Array of {source, format?, options?}, max 20',
         },
-        inline: { type: 'boolean' },
+        idempotencyKey: { type: 'string' },
       },
       required: ['items'],
     },
     outputSchema: {
       type: 'object',
-      properties: { jobId: { type: 'string' } },
-      required: ['jobId'],
+      properties: {
+        jobId: { type: 'string' },
+        sync: { type: 'boolean' },
+        status: { type: 'string' },
+      },
+      required: ['jobId', 'sync', 'status'],
     },
     annotations: {
       readOnlyHint: false,
@@ -167,7 +253,7 @@ const TOOL_DEFS = [
   {
     name: 'get_job_status',
     description:
-      'Get status and temporary download urls for a job. Results auto-delete after 24h; download promptly. Returns {jobId, status, items:[{id,status,size,mime,url,error?}]}.',
+      'Get status and absolute download urls for a job. Results auto-delete after 24h; download promptly. Returns {jobId, status, items:[{id,status,size,mime,url,error?}]}.',
     inputSchema: {
       type: 'object',
       properties: { jobId: { type: 'string' } },
@@ -191,18 +277,28 @@ const TOOL_DEFS = [
   },
 ] as const;
 
-function jobItemsForClient(rec: any, token: string) {
-  return rec.items.map((it: any) => ({
-    id: it.id,
-    status: it.status,
-    size: it.size,
-    mime: it.mime,
-    error: it.error,
-    url:
-      it.outputKey && it.status === 'done'
-        ? `/files/${rec.id}/${it.outputKey.split('/').pop()}?token=${encodeURIComponent(token)}`
-        : undefined,
-  }));
+const PROMPT_DEFS = [
+  {
+    name: 'batch_compress_guide',
+    description:
+      'Step-by-step guide for compressing one or many images via this server.',
+    arguments: [],
+  },
+];
+
+const BATCH_GUIDE_TEXT = `Compress images with this server in 4 steps:
+1. (Optional, recommended) Call get_image_info with the source to learn size/mime/dimensions.
+2. Call list_formats (ids: jpeg, png, webp, avif) and get_options_schema for the chosen format.
+3. Call compress (1 image) or batch_compress (up to 20). Small images (<=2MB) finish immediately with status "done"; larger ones return status "queued" — use inline:true to also get base64 back for small results.
+4. Poll get_job_status with the jobId until status is "done", then download each item url (absolute URLs, valid ~24h).
+Tips: webp quality 80 is a good default (see smart_compress); pass idempotencyKey so client retries never create duplicate jobs.`;
+
+function originOf(c: any): string {
+  try {
+    return new URL(c.req.url).origin;
+  } catch {
+    return '';
+  }
 }
 
 async function getSessionId(env: Env, req: Request): Promise<string | null> {
@@ -240,6 +336,28 @@ export function registerRoutes(app: Hono<{ Bindings: Env }>, env: Env) {
 
   app.get('/health', (c) => c.json({ ok: true }));
 
+  // Readiness: worker bindings + Render backend reachability.
+  app.get('/ready', async (c) => {
+    const checks: Record<string, string> = { worker: 'ok' };
+    if (env.RENDER_URL) {
+      try {
+        const ctrl = new AbortController();
+        const t = setTimeout(() => ctrl.abort(), 8000);
+        const r = await fetch(`${env.RENDER_URL.replace(/\/$/, '')}/health`, {
+          signal: ctrl.signal,
+        });
+        clearTimeout(t);
+        checks.render = r.ok ? 'ok' : `http-${r.status}`;
+      } catch (e: any) {
+        checks.render = `unreachable: ${e?.message || e}`;
+      }
+    } else {
+      checks.render = 'not-configured';
+    }
+    const ok = checks.render === 'ok';
+    return c.json({ ok, checks }, ok ? 200 : 503);
+  });
+
   app.post('/api/upload', async (c) => {
     const body = await c.req.json();
     const token = ownerTokenFromAuth(c.req.header('authorization'));
@@ -270,34 +388,26 @@ export function registerRoutes(app: Hono<{ Bindings: Env }>, env: Env) {
     return c.json({ jobId, r2Key: key });
   });
 
-  // Async enqueue (queue consumer does the work) — avoids Worker CPU walls on big batches.
   app.post('/api/compress', async (c) => {
     const body = await c.req.json();
     const token = ownerTokenFromAuth(c.req.header('authorization'));
     const rl = await checkRateLimit(env, token);
     if (rl) return c.json({ error: `rate limited. Retry in ${rl}s.` }, 429);
     const items = Array.isArray(body.items) ? body.items : [body];
-    const jobId = await createQueuedJob(
-      env,
-      token,
-      items,
-      body.inline === true,
-    );
-    return c.json({ jobId, status: 'queued' });
-  });
-
-  // Sync fallback for tiny single images (kept for compat; batch should use async).
-  app.post('/api/compress-sync', async (c) => {
-    const body = await c.req.json();
-    const token = ownerTokenFromAuth(c.req.header('authorization'));
-    const items = Array.isArray(body.items) ? body.items : [body];
-    if (items.length > 4)
-      return c.json(
-        { error: 'sync limited to 4 items. Use /api/compress.' },
-        400,
-      );
-    const jobId = await processJobSync(env, token, items, true);
-    return c.json({ jobId, status: 'done' });
+    const r = await submitJob(env, token, items, {
+      inline: body.inline === true,
+      idempotencyKey: body.idempotencyKey,
+    });
+    const out: any = {
+      jobId: r.jobId,
+      sync: r.sync,
+      status: r.sync ? 'done' : 'queued',
+    };
+    if (r.inlineBase64) {
+      out.base64 = r.inlineBase64;
+      out.mime = r.inlineMime;
+    }
+    return c.json(out);
   });
 
   app.get('/api/jobs/:jobId', async (c) => {
@@ -317,7 +427,7 @@ export function registerRoutes(app: Hono<{ Bindings: Env }>, env: Env) {
     return c.json({
       jobId: rec.id,
       status: rec.status,
-      items: jobItemsForClient(rec, token),
+      items: jobItemsForClient(rec, token, originOf(c)),
     });
   });
 
@@ -353,7 +463,6 @@ export function registerRoutes(app: Hono<{ Bindings: Env }>, env: Env) {
   });
 
   async function handleMcpMessage(c: any) {
-    // Streamable HTTP: require Accept with both types per spec (be lenient: accept either).
     const accept = c.req.header('accept') || '';
     if (
       !accept.includes('application/json') &&
@@ -369,8 +478,8 @@ export function registerRoutes(app: Hono<{ Bindings: Env }>, env: Env) {
     }
     const body = await c.req.json();
     const token = ownerTokenFromAuth(c.req.header('authorization'));
+    const origin = originOf(c);
     const { method, id, params } = body || {};
-    // Notifications (no id): acknowledge with 202, no body.
     if (id === undefined || id === null) {
       return new Response(null, { status: 202 });
     }
@@ -382,14 +491,31 @@ export function registerRoutes(app: Hono<{ Bindings: Env }>, env: Env) {
       c.header('Mcp-Session-Id', sid);
       return reply({
         protocolVersion: '2024-11-05',
-        capabilities: { tools: {} },
-        serverInfo: { name: 'squoosh-mcp', version: '0.2.0' },
+        capabilities: { tools: {}, prompts: {} },
+        serverInfo: { name: 'squoosh-mcp', version: '0.3.0' },
       });
     }
-    // All other requests should carry a session id once initialized (lenient if missing).
     const sid = await getSessionId(env, c.req.raw);
     if (sid) c.header('Mcp-Session-Id', sid);
 
+    if (method === 'prompts/list') {
+      return reply({ prompts: PROMPT_DEFS });
+    }
+    if (method === 'prompts/get') {
+      if (params?.name !== 'batch_compress_guide') {
+        return reply(null, {
+          code: -32602,
+          message: `unknown prompt "${params?.name}".`,
+        });
+      }
+      return reply({
+        description:
+          'Step-by-step guide for compressing images via this server.',
+        messages: [
+          { role: 'user', content: { type: 'text', text: BATCH_GUIDE_TEXT } },
+        ],
+      });
+    }
     if (method === 'tools/list') {
       return reply({ tools: TOOL_DEFS });
     }
@@ -436,12 +562,12 @@ export function registerRoutes(app: Hono<{ Bindings: Env }>, env: Env) {
           await env.JOBS.put(jobId, JSON.stringify(record), {
             expirationTtl: 86400,
           });
-          const data = { jobId, r2Key: key };
-          return reply(structured(data, 'Uploaded.'));
+          return reply(structured({ jobId, r2Key: key }, 'Uploaded.'));
         }
         if (name === 'list_formats') {
-          const data = { formats: listFormats() };
-          return reply(structured(data, 'Supported formats.'));
+          return reply(
+            structured({ formats: listFormats() }, 'Supported formats.'),
+          );
         }
         if (name === 'get_options_schema') {
           const schema = getOptionSchema(args.format);
@@ -450,26 +576,64 @@ export function registerRoutes(app: Hono<{ Bindings: Env }>, env: Env) {
               code: -32000,
               message: `unknown format "${args.format}". Call list_formats first.`,
             });
-          const data = { format: args.format, schema };
-          return reply(structured(data, `Options for ${args.format}.`));
-        }
-        if (name === 'compress') {
-          const jobId = await createQueuedJob(env, token, [args], false);
-          const data = { jobId };
           return reply(
-            structured(data, 'Queued. Poll get_job_status with this jobId.'),
+            structured(
+              { format: args.format, schema },
+              `Options for ${args.format}.`,
+            ),
+          );
+        }
+        if (name === 'get_image_info') {
+          const info = await getImageInfo(env, args.source);
+          return reply(structured(info, 'Image info.'));
+        }
+        if (name === 'smart_compress' || name === 'compress') {
+          const items = [
+            {
+              source: args.source,
+              r2Key: args.r2Key,
+              format:
+                args.format || (name === 'smart_compress' ? 'webp' : 'jpeg'),
+              options:
+                args.options ||
+                (name === 'smart_compress' ? { quality: 80 } : undefined),
+            },
+          ];
+          const r = await submitJob(env, token, items, {
+            inline: args.inline === true,
+            idempotencyKey: args.idempotencyKey,
+          });
+          const data: any = {
+            jobId: r.jobId,
+            sync: r.sync,
+            status: r.sync ? 'done' : 'queued',
+          };
+          if (r.inlineBase64) {
+            data.base64 = r.inlineBase64;
+            data.mime = r.inlineMime;
+          }
+          return reply(
+            structured(
+              data,
+              r.sync
+                ? 'Done immediately.'
+                : 'Queued. Poll get_job_status with this jobId.',
+            ),
           );
         }
         if (name === 'batch_compress') {
-          const jobId = await createQueuedJob(
-            env,
-            token,
-            args.items || [],
-            false,
-          );
-          const data = { jobId };
+          const r = await submitJob(env, token, args.items || [], {
+            idempotencyKey: args.idempotencyKey,
+          });
           return reply(
-            structured(data, 'Queued. Poll get_job_status with this jobId.'),
+            structured(
+              {
+                jobId: r.jobId,
+                sync: r.sync,
+                status: r.sync ? 'done' : 'queued',
+              },
+              'Queued. Poll get_job_status with this jobId.',
+            ),
           );
         }
         if (name === 'get_job_status') {
@@ -489,7 +653,7 @@ export function registerRoutes(app: Hono<{ Bindings: Env }>, env: Env) {
           const data = {
             jobId: rec.id,
             status: rec.status,
-            items: jobItemsForClient(rec, token),
+            items: jobItemsForClient(rec, token, origin),
           };
           return reply(structured(data, `Job ${rec.status}.`));
         }
@@ -510,7 +674,6 @@ export function registerRoutes(app: Hono<{ Bindings: Env }>, env: Env) {
     });
   }
 
-  // Streamable HTTP endpoint (POST) + legacy SSE stream (GET) + session close (DELETE).
   app.post('/mcp', handleMcpMessage);
   app.get('/mcp', (c) =>
     c.text(
@@ -548,6 +711,14 @@ export function registerRoutes(app: Hono<{ Bindings: Env }>, env: Env) {
     if (sid) await env.JOBS.delete(`mcp:session:${sid}`);
     return new Response(null, { status: 200 });
   });
+
+  // Unknown API paths -> JSON 404 (must come before the SPA fallback).
+  app.all('/api/*', (c) =>
+    c.json({ error: `unknown api path: ${new URL(c.req.url).pathname}` }, 404),
+  );
+  app.all('/mcp/*', (c) =>
+    c.json({ error: `unknown mcp path: ${new URL(c.req.url).pathname}` }, 404),
+  );
 
   app.get('*', async (c) => env.ASSETS.fetch(c.req.raw));
 }
