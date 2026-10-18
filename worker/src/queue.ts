@@ -6,8 +6,8 @@ import {
   markUpscaleFailed,
 } from './upscale';
 
-/** Messages that keep failing land in the DLQ after this many attempts. */
-const MAX_ATTEMPTS = 5; // must match max_retries in wrangler.toml
+/** Queue redelivers up to max_retries (wrangler.toml); this cap marks terminal failure. */
+const MAX_ATTEMPTS = 5;
 
 /** Compression consumer (unchanged behaviour): one job message, ack always. */
 async function handleCompressMessage(env: Env, msg: Message<any>) {
