@@ -10,7 +10,7 @@
 | 压缩后端        | Render Node 服务（sharp）                                          | Worker 队列/同步调用                                                            |
 
 架构：`Agent → Worker 网关（MCP/队列/R2/KV）→ Render Node（sharp 真实压缩）→ R2 临时存储（1 天自动清理）→ 绝对下载 URL`。
-job 按 token 隔离，只能查自己的 jobId。staging 环境：`squoosh-mcp-staging`（同名资源加 `-staging` 后缀）。
+job 按 token 隔离，只能查自己的 jobId。staging 环境：`https://squooshmcp.016666666.xyz`（Worker 名 `squoosh-mcp-staging`，资源加 `-staging` 后缀；`squooshmcp.mistorify.com` 同域保护下程序调用会被 403）。
 
 ## 快速验证
 
