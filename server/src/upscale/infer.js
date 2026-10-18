@@ -173,7 +173,17 @@ export async function inferTilePatch({ imageBase64, model, x0, y0 }) {
   const raw = tileOut[outputName].data;
   const ow = TILE_SIZE * scale;
   const oh = TILE_SIZE * scale;
-  const patch = await sharp(Buffer.from(new Uint8Array(raw.buffer)), {
+  // float32 planar [0..1] -> 8-bit interleaved RGB. Uint8ClampedArray clamps and
+  // rounds exactly like blendTile's writes, so a patch serialised here and
+  // blended by the worker reproduces this process's whole-image output.
+  const plane = ow * oh;
+  const patch8 = new Uint8ClampedArray(3 * plane);
+  for (let i = 0; i < plane; i++) {
+    patch8[i * 3] = raw[i] * 255;
+    patch8[i * 3 + 1] = raw[plane + i] * 255;
+    patch8[i * 3 + 2] = raw[2 * plane + i] * 255;
+  }
+  const patch = await sharp(Buffer.from(patch8.buffer), {
     raw: { width: ow, height: oh, channels: 3 },
   })
     .png()
