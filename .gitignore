@@ -12,3 +12,5 @@ src/client/lazy-app/worker-bridge/meta.ts
 src/client/lazy-app/feature-meta/index.ts
 worker/.wrangler/
 node_modules/
+
+.codegraph/
