@@ -1,6 +1,7 @@
 import express from 'express';
 import cors from 'cors';
 import sharp from 'sharp';
+import { MODELS, inferUpscale } from './upscale/index.js';
 
 const app = express();
 app.use(cors());
@@ -123,6 +124,25 @@ app.post('/compress', gate, async (req, res) => {
     });
   } catch (e) {
     res.status(500).json({ error: e?.message || String(e) });
+  }
+});
+
+
+app.get('/upscale/models', gate, (req, res) => {
+  res.json({ models: MODELS.map((m) => ({ id: m.id, name: m.name, scale: m.scale, sizeMB: m.sizeMB })) });
+});
+
+app.post('/upscale', gate, async (req, res) => {
+  try {
+    const { imageBase64, model, targetScale } = req.body || {};
+    if (!imageBase64) return res.status(400).json({ error: 'imageBase64 required.' });
+    if (!model) return res.status(400).json({ error: 'model required.' });
+    const m = MODELS.find((x) => x.id === model);
+    if (!m) return res.status(400).json({ error: `unknown model "${model}". Available: ${MODELS.map((x) => x.id).join(', ')}` });
+    const out = await inferUpscale({ imageBase64, model, targetScale });
+    res.json(out);
+  } catch (e) {
+    res.status(400).json({ error: e?.message || String(e) });
   }
 });
 
