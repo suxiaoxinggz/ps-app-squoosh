@@ -1,13 +1,13 @@
 import sharp from 'sharp';
 import ort from 'onnxruntime-node';
-import { TILE_SIZE, extractTile, buildBlendWeights, blendTile, downsampleTile } from './tiling.js';
+import { TILE_SIZE, TILE_OVERLAP, TILE_STEP, extractTile, buildBlendWeights, blendTile, downsampleTile } from './tiling.js';
 import { findModel } from './models.js';
 import { getSession } from './session.js';
 
 const MAX_OUTPUT_DIM = 8000;
 const MAX_OUTPUT_PIXELS = 50_000_000;
 
-export async function inferUpscale({ imageBase64, model, targetScale }) {
+async function _inferUpscale({ imageBase64, model, targetScale }) {
   const m = findModel(model);
   if (!m) throw new Error(`unknown model ${model}. Available: ${['general-x4v3','anime-v3','cugan-2x','swin-light-x2'].join(', ')}`);
   const buf = Buffer.from(imageBase64.replace(/^data:[^;]+;base64,/, ''), 'base64');
@@ -39,8 +39,8 @@ export async function inferUpscale({ imageBase64, model, targetScale }) {
   const session = await getSession(model);
   const inputName = session.inputNames[0];
   const outputName = session.outputNames[0];
-  const tilesX = Math.max(1, Math.ceil((width - 16) / (256 - 16)));
-  const tilesY = Math.max(1, Math.ceil((height - 16) / (256 - 16)));
+  const tilesX = Math.max(1, Math.ceil((width - TILE_OVERLAP) / TILE_STEP));
+  const tilesY = Math.max(1, Math.ceil((height - TILE_OVERLAP) / TILE_STEP));
   const totalTiles = tilesX * tilesY;
   const tileBuffer = new Float32Array(3 * TILE_SIZE * TILE_SIZE);
   const weights = buildBlendWeights(blendScale);
@@ -48,8 +48,8 @@ export async function inferUpscale({ imageBase64, model, targetScale }) {
   for (let ty = 0; ty < tilesY; ty++) {
     const ay = ty === 0 ? weights.full : weights.ramp;
     for (let tx = 0; tx < tilesX; tx++) {
-      const x0 = tx * (TILE_SIZE - 16);
-      const y0 = ty * (TILE_SIZE - 16);
+      const x0 = tx * TILE_STEP;
+      const y0 = ty * TILE_STEP;
       const refill = () => extractTile(imageData, x0, y0, tileBuffer);
       refill();
       const tileTensor = new ort.Tensor('float32', tileBuffer, [1, 3, TILE_SIZE, TILE_SIZE]);
@@ -66,9 +66,21 @@ export async function inferUpscale({ imageBase64, model, targetScale }) {
   if (outW !== blendW || outH !== blendH) {
     // resize via sharp
     const stitched = await sharp(Buffer.from(outData), { raw: { width: blendW, height: blendH, channels: 4 } }).png().toBuffer();
-    pngBuf = await sharp(stitched).resize(outW, outH).png().toBuffer();
+    pngBuf = await sharp(stitched).resize(outW, outH, { kernel: 'lanczos3' }).png().toBuffer();
   } else {
     pngBuf = await sharp(Buffer.from(outData), { raw: { width: blendW, height: blendH, channels: 4 } }).png().toBuffer();
   }
   return { base64: pngBuf.toString('base64'), mime: 'image/png', width: outW, height: outH };
+}
+
+
+function withTimeout(promise, ms, label) {
+  return new Promise((resolve, reject) => {
+    const t = setTimeout(() => reject(new Error(`upscale timed out after ${Math.round(ms/1000)}s`)), ms);
+    promise.then((v)=>{clearTimeout(t);resolve(v);},(e)=>{clearTimeout(t);reject(e);});
+  });
+}
+
+export async function inferUpscale(args) {
+  return withTimeout(_inferUpscale(args), 300000, 'upscale');
 }

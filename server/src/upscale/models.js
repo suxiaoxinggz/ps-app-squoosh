@@ -1,3 +1,5 @@
+// MIT License — vendored from isixe/bg2x (src/config/models.ts)
+// Copyright (c) isixe. See NOTICE-bg2x.md. URLs copied from bg2x.
 // Model registry (whitelist). 4 remote models; ids are the short labels used
 // by the spec/plan. URLs copied from isixe/bg2x src/config/models.ts.
 export const MODELS = [
