@@ -5,7 +5,7 @@
   "type": "module",
   "main": "src/index.js",
   "scripts": {
-    "start": "node --expose-gc src/index.js",
+    "start": "node --expose-gc --max-old-space-size=400 src/index.js",
     "dev": "node src/index.js"
   },
   "dependencies": {
