@@ -47,7 +47,7 @@ const TILE_TIMEOUT_MS = 180_000;
  */
 const SYNC_TILE_ATTEMPTS = 3;
 const TILE_RETRY_DELAY_MS = 2_000;
-const MAX_OUTPUT_DIM = 8000;
+export const MAX_OUTPUT_DIM = 8000;
 /**
  * Hard ceiling on stitched output. The stitcher holds the whole RGBA canvas
  * plus the encoded PNG in the isolate (R2 `put` needs a known length), so the
@@ -56,7 +56,17 @@ const MAX_OUTPUT_DIM = 8000;
  * isolate. That means 2x models top out at 2MP input here even though the
  * server accepts 4MP.
  */
-const MAX_OUTPUT_PIXELS = 8_000_000;
+export const MAX_OUTPUT_PIXELS = 8_000_000;
+
+/**
+ * Effective input budget for a model at output scale `ts`: the server's
+ * per-model MP budget, further capped by the stitcher's output ceiling.
+ * 4x full scale -> 0.5MP, 2x full scale -> 2MP, 4x at targetScale 2 -> 2MP.
+ * Single source of truth for the plan check and the prompt guide text.
+ */
+export function inputMpLimit(scale: number, ts: number = scale): number {
+  return Math.min(mpBudget(scale), MAX_OUTPUT_PIXELS / (ts * ts) / 1e6);
+}
 
 function putRecord(env: Env, jobId: string, rec: JobRecord): Promise<void> {
   return env.JOBS.put(jobId, JSON.stringify(rec), { expirationTtl: 86400 });
@@ -109,21 +119,28 @@ export async function planUpscaleItem(env: Env, item: JobItem): Promise<void> {
     );
   }
   const mp = (width * height) / 1e6;
-  const limit = mpBudget(m.scale);
-  if (mp > limit) {
+  const ts = item.targetScale ?? m.scale;
+  // Report the limit the worker actually enforces (output ceiling included),
+  // not the looser server-side per-model budget: the guide text quotes it too.
+  const maxInputMp = inputMpLimit(m.scale, ts);
+  if (mp > maxInputMp) {
+    const scaleNote =
+      ts === m.scale
+        ? `${m.scale}x model`
+        : `${m.scale}x model at targetScale ${ts}`;
     throw new PermanentUpscaleError(
-      `input too large (${mp.toFixed(2)}MP). ${m.scale}x models accept <=${limit}MP on the server. Resize first, or use the local edition for large images.`,
+      `input too large (${mp.toFixed(2)}MP). The ${MAX_OUTPUT_DIM}px / ${MAX_OUTPUT_PIXELS / 1e6}MP stitched-output cap allows <=${maxInputMp}MP input for a ${scaleNote}. Resize first, or use the local edition for large images.`,
     );
   }
-  const ts = item.targetScale ?? m.scale;
   const destW = width * ts;
   const destH = height * ts;
   if (destW > MAX_OUTPUT_DIM || destH > MAX_OUTPUT_DIM) {
     throw new PermanentUpscaleError(
-      `output ${destW}x${destH} exceeds the ${MAX_OUTPUT_DIM}px limit.`,
+      `output ${destW}x${destH} exceeds the ${MAX_OUTPUT_DIM}px limit. Use a smaller image or targetScale.`,
     );
   }
   if (destW * destH > MAX_OUTPUT_PIXELS) {
+    // Backstop: inputMpLimit already keeps this under the cap.
     throw new PermanentUpscaleError(
       `output too large (${(destW * destH) / 1e6}MP, max ${MAX_OUTPUT_PIXELS / 1e6}MP). Use a smaller image or targetScale.`,
     );
