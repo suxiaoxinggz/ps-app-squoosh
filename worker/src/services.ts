@@ -1,4 +1,4 @@
-import type { Env, JobRecord, JobItem } from './types';
+import type { Env, JobRecord, JobItem, JobKindName } from './types';
 
 export function ownerTokenFromAuth(auth?: string | null): string {
   return (auth || '').replace(/^Bearer\s+/i, '').trim() || 'anon';
@@ -291,13 +291,38 @@ function renderHeaders(env: Env): Record<string, string> {
   return h;
 }
 
-async function renderPost(env: Env, path: string, body: any): Promise<any> {
+/**
+ * POST JSON to the Render backend. `timeoutMs` is optional: compress calls pass
+ * nothing (unchanged behaviour), upscale tile calls pass a bound so a hung
+ * backend does not pin a queue consumer.
+ */
+export async function renderPost(
+  env: Env,
+  path: string,
+  body: any,
+  timeoutMs?: number,
+): Promise<any> {
   if (!env.RENDER_URL) throw new Error('compression backend not configured.');
-  const res = await fetch(`${env.RENDER_URL.replace(/\/$/, '')}${path}`, {
-    method: 'POST',
-    headers: renderHeaders(env),
-    body: JSON.stringify(body),
-  });
+  const ctrl = timeoutMs ? new AbortController() : null;
+  const timer = ctrl ? setTimeout(() => ctrl.abort(), timeoutMs) : null;
+  let res: Response;
+  try {
+    res = await fetch(`${env.RENDER_URL.replace(/\/$/, '')}${path}`, {
+      method: 'POST',
+      headers: renderHeaders(env),
+      body: JSON.stringify(body),
+      signal: ctrl?.signal,
+    });
+  } catch (e: any) {
+    if (e?.name === 'AbortError') {
+      throw new Error(
+        `backend timed out after ${Math.round((timeoutMs || 0) / 1000)}s.`,
+      );
+    }
+    throw e;
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
   if (!res.ok) {
     let detail = '';
     try {
@@ -385,7 +410,63 @@ export async function getImageInfo(
 interface SubmitOpts {
   inline?: boolean;
   idempotencyKey?: string;
+  /** Job kind handler; defaults to compression. */
+  kind?: JobKindSpec;
 }
+
+/**
+ * A job kind plugs into the shared submit/queue skeleton. Compression and
+ * upscaling differ only in input validation, the per-item processing function,
+ * the fast-path gate, and which queue the job goes out on.
+ */
+export interface JobKindSpec {
+  name: JobKindName;
+  /** Max items in one job. */
+  maxItems: number;
+  /** Validate + normalise one input entry. Throws on bad input. */
+  normalize(it: any, i: number): Partial<JobItem>;
+  /** Process stored inputs synchronously (fast path). */
+  processSync(env: Env, jobId: string, items: JobItem[]): Promise<void>;
+  /** Extra gate for the single-item fast path (size/MP/backend checks). */
+  syncEligible(
+    env: Env,
+    items: JobItem[],
+    totalBytes: number,
+    opts: { inline: boolean },
+  ): boolean;
+  /** Per-kind work done before the sync decision (upscale: tile plan). */
+  plan?(env: Env, jobId: string, items: JobItem[]): Promise<void>;
+  /** Enqueue the job, fanning out shards when the kind needs it. */
+  enqueue(
+    env: Env,
+    jobId: string,
+    token: string,
+    record: JobRecord,
+  ): Promise<void>;
+  /** Hint appended to the "too many items" error. */
+  itemLimitHint: string;
+}
+
+/** Compression: unchanged behaviour, now expressed as a JobKindSpec. */
+export const COMPRESS_KIND: JobKindSpec = {
+  name: 'compress',
+  maxItems: MAX_ITEMS_PER_JOB,
+  normalize(it: any) {
+    const format = it.format || 'jpeg';
+    assertSupportedFormat(format);
+    return { format, options: clampOptions(format, it.options) };
+  },
+  processSync: processStoredItems,
+  syncEligible(env, items, totalBytes) {
+    return (
+      items.length === 1 && totalBytes <= SYNC_MAX_BYTES && !!env.RENDER_URL
+    );
+  },
+  async enqueue(env, jobId, token, record) {
+    await env.QUEUE.send({ kind: 'compress', jobId, token, record });
+  },
+  itemLimitHint: 'Split into multiple batch_compress calls.',
+};
 
 /**
  * Unified submit: small single image -> processed synchronously (fast path);
@@ -402,14 +483,15 @@ export async function submitJob(
   inlineBase64?: string;
   inlineMime?: string;
 }> {
+  const kind = opts.kind || COMPRESS_KIND;
   if (!Array.isArray(itemsInput) || itemsInput.length === 0) {
     throw new Error(
       'items must be a non-empty array of {source|r2Key, format?, options?}.',
     );
   }
-  if (itemsInput.length > MAX_ITEMS_PER_JOB) {
+  if (itemsInput.length > kind.maxItems) {
     throw new Error(
-      `too many items (${itemsInput.length}, max ${MAX_ITEMS_PER_JOB}). Split into multiple batch_compress calls.`,
+      `too many items (${itemsInput.length}, max ${kind.maxItems}). ${kind.itemLimitHint}`,
     );
   }
   if (opts.idempotencyKey) {
@@ -422,9 +504,7 @@ export async function submitJob(
   let totalBytes = 0;
   for (let i = 0; i < itemsInput.length; i++) {
     const it = itemsInput[i];
-    const format = it.format || 'jpeg';
-    assertSupportedFormat(format);
-    const options = clampOptions(format, it.options);
+    const norm = kind.normalize(it, i);
     let inputKey: string;
     let inputBytes = 0;
     if (it.r2Key) {
@@ -453,20 +533,31 @@ export async function submitJob(
       id: `item-${i}`,
       status: 'queued',
       inputKey,
-      format,
-      options,
+      ...norm,
     });
   }
 
+  // Per-kind pre-decision work: upscale plans tiles inline only when the caller
+  // asked for inline bytes, so a cold backend never delays a queued submit.
+  if (opts.inline === true && kind.plan) {
+    try {
+      await kind.plan(env, jobId, items);
+    } catch (e: any) {
+      log('job.plan.skip', { jobId, error: e?.message || String(e) });
+    }
+  }
+
   const wantInline = opts.inline === true;
-  const fastPath =
-    items.length === 1 && totalBytes <= SYNC_MAX_BYTES && !!env.RENDER_URL;
+  const fastPath = kind.syncEligible(env, items, totalBytes, {
+    inline: wantInline,
+  });
   if (fastPath) {
-    await processStoredItems(env, jobId, items);
+    await kind.processSync(env, jobId, items);
     const record: JobRecord = {
       id: jobId,
       owner: token,
       status: items.every((x) => x.status === 'done') ? 'done' : 'error',
+      kind: kind.name,
       createdAt: Date.now(),
       expiresAt: Date.now() + 24 * 3600 * 1000,
       items,
@@ -490,7 +581,12 @@ export async function submitJob(
         expirationTtl: 86400,
       });
     }
-    log('job.submit', { jobId, items: items.length, sync: true });
+    log('job.submit', {
+      jobId,
+      kind: kind.name,
+      items: items.length,
+      sync: true,
+    });
     return { jobId, sync: true, inlineBase64, inlineMime };
   }
 
@@ -498,19 +594,25 @@ export async function submitJob(
     id: jobId,
     owner: token,
     status: 'queued',
+    kind: kind.name,
     createdAt: Date.now(),
     expiresAt: Date.now() + 24 * 3600 * 1000,
     items,
     inline: wantInline,
   };
   await env.JOBS.put(jobId, JSON.stringify(record), { expirationTtl: 86400 });
-  await env.QUEUE.send({ jobId, token, record });
+  await kind.enqueue(env, jobId, token, record);
   if (opts.idempotencyKey) {
     await env.JOBS.put(`idem:${token}:${opts.idempotencyKey}`, jobId, {
       expirationTtl: 86400,
     });
   }
-  log('job.submit', { jobId, items: items.length, sync: false });
+  log('job.submit', {
+    jobId,
+    kind: kind.name,
+    items: items.length,
+    sync: false,
+  });
   return { jobId, sync: false };
 }
 
@@ -532,6 +634,17 @@ export function jobItemsForClient(rec: any, token: string, origin: string) {
     size: it.size,
     mime: it.mime,
     error: it.error,
+    // Upscale-only metadata (omitted for compress items).
+    ...(it.model ? { model: it.model } : {}),
+    ...(it.scale
+      ? {
+          scale: it.targetScale ?? it.scale,
+          modelScale: it.scale,
+          ...(it.width && it.height
+            ? { inputWidth: it.width, inputHeight: it.height }
+            : {}),
+        }
+      : {}),
     url:
       it.outputKey && it.status === 'done'
         ? itemDownloadUrl(origin, rec.id, it.outputKey, token)

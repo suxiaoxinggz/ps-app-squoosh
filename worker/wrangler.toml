@@ -32,6 +32,20 @@ max_batch_timeout = 5
 max_concurrency = 2
 dead_letter_queue = "squoosh-dlq"
 
+# Upscale: one tile per message, one message at a time. Serialised because the
+# stitcher updates a single KV job record per tile and Render keeps one ONNX
+# session (512MB free instance).
+[[queues.producers]]
+binding = "UPSCALE_QUEUE"
+queue = "squoosh-upscale"
+
+[[queues.consumers]]
+queue = "squoosh-upscale"
+max_batch_size = 1
+max_batch_timeout = 5
+max_concurrency = 1
+dead_letter_queue = "squoosh-upscale-dlq"
+
 # Staging environment (verify here before touching prod)
 [env.staging]
 name = "squoosh-mcp-staging"
@@ -53,3 +67,14 @@ queue = "squoosh-jobs-staging"
 max_batch_size = 1
 max_batch_timeout = 5
 max_concurrency = 2
+
+[[env.staging.queues.producers]]
+binding = "UPSCALE_QUEUE"
+queue = "squoosh-upscale-staging"
+
+[[env.staging.queues.consumers]]
+queue = "squoosh-upscale-staging"
+max_batch_size = 1
+max_batch_timeout = 5
+max_concurrency = 1
+dead_letter_queue = "squoosh-upscale-dlq-staging"

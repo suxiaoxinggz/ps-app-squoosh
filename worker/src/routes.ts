@@ -10,6 +10,7 @@ import {
   checkRateLimit,
   jobItemsForClient,
 } from './services';
+import { submitUpscaleJob } from './upscale';
 
 const TOOL_DEFS = [
   {
@@ -253,7 +254,7 @@ const TOOL_DEFS = [
   {
     name: 'get_job_status',
     description:
-      'Get status and absolute download urls for a job. Results auto-delete after 24h; download promptly. Returns {jobId, status, items:[{id,status,size,mime,url,error?}]}.',
+      'Get status and absolute download urls for a job. Results auto-delete after 24h; download promptly. Returns {jobId, status, items:[{id,status,size,mime,url,error?,model?,scale?}]}. Upscale items also carry model/scale and the input dimensions.',
     inputSchema: {
       type: 'object',
       properties: { jobId: { type: 'string' } },
@@ -275,6 +276,96 @@ const TOOL_DEFS = [
       openWorldHint: false,
     },
   },
+  {
+    name: 'upscale_image',
+    description:
+      'AI super-resolution for ONE image (models: general-x4v3 default 4x, anime-v3 4x, cugan-2x 2x, swin-light-x2 2x). Small inputs (<=0.5MP) with inline:true return immediately with status done; everything else queues — poll get_job_status every ~10s, there is no tile-level progress. Output is always PNG. Example: {"source":{"type":"base64","value":"..."},"model":"general-x4v3","targetScale":2,"inline":true}.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        source: { type: 'object' },
+        r2Key: {
+          type: 'string',
+          description: 'Alternative to source (from upload_image)',
+        },
+        model: {
+          type: 'string',
+          description:
+            'general-x4v3 (default, 4x) | anime-v3 (4x) | cugan-2x (2x) | swin-light-x2 (2x). Unknown ids error with the list.',
+        },
+        targetScale: {
+          type: 'number',
+          description:
+            'Optional output scale that evenly divides the model scale (e.g. 2 for a 4x model) to save compute.',
+        },
+        inline: {
+          type: 'boolean',
+          description:
+            'If true and the input is <=0.5MP, stitch now and return base64 PNG (<=2MB).',
+        },
+        idempotencyKey: {
+          type: 'string',
+          description: 'Client key: retries return the same jobId.',
+        },
+      },
+      required: ['source'],
+    },
+    outputSchema: {
+      type: 'object',
+      properties: {
+        jobId: { type: 'string' },
+        sync: { type: 'boolean' },
+        status: { type: 'string' },
+      },
+      required: ['jobId', 'sync', 'status'],
+    },
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: true,
+    },
+  },
+  {
+    name: 'smart_upscale',
+    description:
+      'One-call upscale with good defaults (general-x4v3, 4x, PNG out). Same queueing rules as upscale_image: small inputs with inline:true return immediately, the rest queue for get_job_status.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        source: { type: 'object' },
+        r2Key: {
+          type: 'string',
+          description: 'Alternative to source (from upload_image)',
+        },
+        inline: {
+          type: 'boolean',
+          description:
+            'If true and the input is <=0.5MP, stitch now and return base64 PNG (<=2MB).',
+        },
+        idempotencyKey: {
+          type: 'string',
+          description: 'Client key: retries return the same jobId.',
+        },
+      },
+      required: ['source'],
+    },
+    outputSchema: {
+      type: 'object',
+      properties: {
+        jobId: { type: 'string' },
+        sync: { type: 'boolean' },
+        status: { type: 'string' },
+      },
+      required: ['jobId', 'sync', 'status'],
+    },
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: true,
+    },
+  },
 ] as const;
 
 const PROMPT_DEFS = [
@@ -291,7 +382,15 @@ const BATCH_GUIDE_TEXT = `Compress images with this server in 4 steps:
 2. Call list_formats (ids: jpeg, png, webp, avif) and get_options_schema for the chosen format.
 3. Call compress (1 image) or batch_compress (up to 20). Small images (<=2MB) finish immediately with status "done"; larger ones return status "queued" — use inline:true to also get base64 back for small results.
 4. Poll get_job_status with the jobId until status is "done", then download each item url (absolute URLs, valid ~24h).
-Tips: webp quality 80 is a good default (see smart_compress); pass idempotencyKey so client retries never create duplicate jobs.`;
+Tips: webp quality 80 is a good default (see smart_compress); pass idempotencyKey so client retries never create duplicate jobs.
+
+Upscale (AI super-resolution) with the same server:
+1. Call upscale_image with {source|r2Key, model?, targetScale?, inline?}, or smart_upscale for a one-call default. Models: general-x4v3 (default, 4x), anime-v3 (4x), cugan-2x (2x), swin-light-x2 (2x). An unknown model id errors and lists the four — there is no silent fallback.
+2. targetScale must evenly divide the model scale (e.g. 2 for a 4x model) and only lowers the output, never raises it.
+3. Small inputs (<=0.5MP) with inline:true are stitched inside the call and return base64 immediately; everything else returns status "queued". Poll get_job_status about every 10s: progress is only queued -> processing -> done (tile-level progress is not exposed, and each tile is a separate backend call).
+4. Budgets: 4x models accept <=2MP input, 2x models <=4MP; the stitched output is capped at 8000px and 16MP on the worker. Over-budget requests fail with the measured reason — resize first or use the local edition.
+5. Upscale output is always PNG (lossless). Run compress/batch_compress afterwards if you need jpeg/webp/avif.
+6. get_job_status items for upscale also carry model, scale, and the input dimensions.`;
 
 function originOf(c: any): string {
   try {
@@ -440,7 +539,13 @@ export function registerRoutes(app: Hono<{ Bindings: Env }>, env: Env) {
     if (!raw) return c.text('not found', 404);
     const rec = JSON.parse(raw);
     if (rec.owner !== token) return c.text('forbidden', 403);
-    const obj = await env.BUCKET.get(`jobs/${jobId}/${name}`);
+    // Resolve through the item so any storage prefix works (upscale outputs
+    // live under upscale/{jobId}/, compression outputs under jobs/{jobId}/).
+    const item = (rec.items || []).find(
+      (it: any) => it.outputKey && it.outputKey.split('/').pop() === name,
+    );
+    const key = item?.outputKey || `jobs/${jobId}/${name}`;
+    const obj = await env.BUCKET.get(key);
     if (!obj) return c.text('not found', 404);
     return new Response(obj.body, {
       headers: {
@@ -619,6 +724,33 @@ export function registerRoutes(app: Hono<{ Bindings: Env }>, env: Env) {
               r.sync
                 ? 'Done immediately.'
                 : 'Queued. Poll get_job_status with this jobId.',
+            ),
+          );
+        }
+        if (name === 'upscale_image' || name === 'smart_upscale') {
+          const r = await submitUpscaleJob(env, token, {
+            source: args.source,
+            r2Key: args.r2Key,
+            model: args.model,
+            targetScale: args.targetScale,
+            inline: args.inline === true,
+            idempotencyKey: args.idempotencyKey,
+          });
+          const data: any = {
+            jobId: r.jobId,
+            sync: r.sync,
+            status: r.sync ? 'done' : 'queued',
+          };
+          if (r.inlineBase64) {
+            data.base64 = r.inlineBase64;
+            data.mime = r.inlineMime;
+          }
+          return reply(
+            structured(
+              data,
+              r.sync
+                ? 'Upscaled immediately (PNG).'
+                : 'Queued. Poll get_job_status about every 10s until done.',
             ),
           );
         }
