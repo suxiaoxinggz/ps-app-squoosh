@@ -25,9 +25,17 @@ async function _inferUpscale({ imageBase64, model, targetScale }) {
     imageBase64.replace(/^data:[^;]+;base64,/, ''),
     'base64',
   );
-  const meta = await sharp(buf).metadata();
-  const width = meta.width;
-  const height = meta.height;
+  // Single canonical decode: dimensions come from the decoded object itself,
+  // never from a separate metadata() call (progressive JPEG / EXIF orientation
+  // can report different dims and corrupt the tile math downstream).
+  const { data, info: rawInfo } = await sharp(buf)
+    .rotate()
+    .ensureAlpha()
+    .raw()
+    .toBuffer({ resolveWithObject: true });
+  const width = rawInfo.width;
+  const height = rawInfo.height;
+  const imageData = { data, width, height };
   const mp = (width * height) / 1e6;
   const scale = m.scale;
   const limit = scale === 4 ? 2 : 4;
@@ -36,11 +44,6 @@ async function _inferUpscale({ imageBase64, model, targetScale }) {
       `input too large (${mp.toFixed(2)}MP). ${scale}x models accept <=${limit}MP. Use local edition for larger images.`,
     );
   }
-  const { data } = await sharp(buf)
-    .ensureAlpha()
-    .raw()
-    .toBuffer({ resolveWithObject: true });
-  const imageData = { data, width, height };
   const ts = targetScale ?? scale;
   const rawFactor = scale / ts;
   const downsample = ts < scale && Number.isInteger(rawFactor);
@@ -149,14 +152,14 @@ export async function inferTilePatch({ imageBase64, model, x0, y0 }) {
     imageBase64.replace(/^data:[^;]+;base64,/, ''),
     'base64',
   );
-  const meta = await sharp(buf).metadata();
-  const width = meta.width;
-  const height = meta.height;
-  const { data } = await sharp(buf)
+  // Same canonical decode as _inferUpscale (see above): never trust a
+  // separate metadata() call for tile math inputs.
+  const { data, info: rawInfo } = await sharp(buf)
+    .rotate()
     .ensureAlpha()
     .raw()
     .toBuffer({ resolveWithObject: true });
-  const imageData = { data, width, height };
+  const imageData = { data, width: rawInfo.width, height: rawInfo.height };
   const scale = m.scale;
   const tileBuffer = new Float32Array(3 * TILE_SIZE * TILE_SIZE);
   extractTile(imageData, x0, y0, tileBuffer);

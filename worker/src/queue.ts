@@ -3,7 +3,7 @@ import { processStoredItems, log } from './services';
 import { handleUpscaleQueueMessage, markUpscaleFailed } from './upscale';
 
 /** Messages that keep failing land in the DLQ after this many attempts. */
-const MAX_ATTEMPTS = 3;
+const MAX_ATTEMPTS = 5; // must match max_retries in wrangler.toml
 
 /** Compression consumer (unchanged behaviour): one job message, ack always. */
 async function handleCompressMessage(env: Env, msg: Message<any>) {

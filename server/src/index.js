@@ -35,7 +35,7 @@ app.post('/metadata', gate, async (req, res) => {
       imageBase64.replace(/^data:[^;]+;base64,/, ''),
       'base64',
     );
-    const meta = await sharp(buf).metadata();
+    const meta = await sharp(buf).rotate().metadata();
     res.json({
       width: meta.width,
       height: meta.height,

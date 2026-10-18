@@ -14,3 +14,4 @@ worker/.wrangler/
 node_modules/
 
 .codegraph/
+server/.model-cache/

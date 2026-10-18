@@ -44,6 +44,10 @@ queue = "squoosh-upscale"
 max_batch_size = 1
 max_batch_timeout = 5
 max_concurrency = 1
+# 512MB Render restarts take ~30-60s and 502 every tile in that window; retry
+# with a delay instead of burning all attempts back to back.
+max_retries = 5
+retry_delay = 15
 dead_letter_queue = "squoosh-upscale-dlq"
 
 # Staging environment (verify here before touching prod)
@@ -77,4 +81,6 @@ queue = "squoosh-upscale-staging"
 max_batch_size = 1
 max_batch_timeout = 5
 max_concurrency = 1
+max_retries = 5
+retry_delay = 15
 dead_letter_queue = "squoosh-upscale-dlq-staging"

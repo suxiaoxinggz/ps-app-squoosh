@@ -40,6 +40,13 @@ const PLAN_TIMEOUT_MS = 30_000;
  * slow models (swin-light-x2) are slower, so stay generous.
  */
 const TILE_TIMEOUT_MS = 180_000;
+/**
+ * The sync path has no queue to retry for it, and the free Render instance
+ * does return sporadic 502s (restart / cold wake) between tiles, so a tile is
+ * retried in-request. The queue path leaves retries to Cloudflare Queues.
+ */
+const SYNC_TILE_ATTEMPTS = 3;
+const TILE_RETRY_DELAY_MS = 2_000;
 const MAX_OUTPUT_DIM = 8000;
 /**
  * Hard ceiling on stitched output. The stitcher holds the whole RGBA canvas
@@ -124,24 +131,64 @@ export async function planUpscaleItem(env: Env, item: JobItem): Promise<void> {
   }));
 }
 
+function sleep(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+/**
+ * Call POST /upscale/tile with bounded in-request retries. The sync path uses
+ * this (it has no queue to retry for it); the queue path passes attempts=1 and
+ * relies on Cloudflare Queues.
+ */
+async function renderTile(
+  env: Env,
+  jobId: string,
+  tile: UpscaleTile,
+  body: any,
+  attempts: number,
+): Promise<any> {
+  let lastErr: any;
+  for (let a = 1; a <= attempts; a++) {
+    try {
+      return await renderPost(env, '/upscale/tile', body, TILE_TIMEOUT_MS);
+    } catch (e: any) {
+      lastErr = e;
+      if (a < attempts) {
+        log('upscale.tile.retry', {
+          jobId,
+          tx: tile.tx,
+          ty: tile.ty,
+          attempt: a,
+          attempts,
+          error: e?.message || String(e),
+        });
+        await sleep(TILE_RETRY_DELAY_MS);
+      }
+    }
+  }
+  throw lastErr;
+}
+
 /** ONE tile: ask Render for the patch, park it in R2. */
 export async function processUpscaleTile(
   env: Env,
   jobId: string,
   item: JobItem,
   tile: UpscaleTile,
+  attempts = 1,
 ): Promise<void> {
   const bytes = await readInput(env, item);
-  const data = await renderPost(
+  const data = await renderTile(
     env,
-    '/upscale/tile',
+    jobId,
+    tile,
     {
       imageBase64: bytesToBase64(bytes),
       model: item.model,
       x0: tile.tx * TILE_STEP,
       y0: tile.ty * TILE_STEP,
     },
-    TILE_TIMEOUT_MS,
+    attempts,
   );
   if (!data?.base64)
     throw new Error(`backend returned no patch for ${tile.tx},${tile.ty}.`);
@@ -217,12 +264,21 @@ export async function processUpscaleItems(
     try {
       if (!item.tiles) await planUpscaleItem(env, item);
       for (const t of item.tiles || []) {
-        if (t.status !== 'done') await processUpscaleTile(env, jobId, item, t);
+        if (t.status !== 'done') {
+          await processUpscaleTile(env, jobId, item, t, SYNC_TILE_ATTEMPTS);
+        }
       }
       await finalizeUpscaleItem(env, jobId, item);
     } catch (e: any) {
       item.status = 'error';
       item.error = e?.message || 'upscale failed';
+      log('upscale.sync.failed', {
+        jobId,
+        error: item.error,
+        tiles: (item.tiles || [])
+          .map((t) => `${t.tx},${t.ty}:${t.status}`)
+          .join(' '),
+      });
     }
   }
 }
