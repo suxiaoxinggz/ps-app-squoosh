@@ -388,7 +388,7 @@ Upscale (AI super-resolution) with the same server:
 1. Call upscale_image with {source|r2Key, model?, targetScale?, inline?}, or smart_upscale for a one-call default. Models: general-x4v3 (default, 4x), anime-v3 (4x), cugan-2x (2x), swin-light-x2 (2x). An unknown model id errors and lists the four — there is no silent fallback.
 2. targetScale must evenly divide the model scale (e.g. 2 for a 4x model) and only lowers the output, never raises it.
 3. Small inputs (<=0.5MP) with inline:true are stitched inside the call and return base64 immediately; everything else returns status "queued". Poll get_job_status about every 10s: progress is only queued -> processing -> done (tile-level progress is not exposed, and each tile is a separate backend call).
-4. Budgets: 4x models accept <=2MP input, 2x models <=4MP; the stitched output is capped at 8000px and 16MP on the worker. Over-budget requests fail with the measured reason — resize first or use the local edition.
+4. Budgets: the stitched output is capped at 8000px per side and 8MP total; at full scale that means 4x models accept <=0.5MP input and 2x models <=2MP. Over-budget requests fail with the measured reason — resize first or use the local edition.
 5. Upscale output is always PNG (lossless). Run compress/batch_compress afterwards if you need jpeg/webp/avif.
 6. get_job_status items for upscale also carry model, scale, and the input dimensions.`;
 

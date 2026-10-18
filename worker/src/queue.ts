@@ -1,6 +1,10 @@
 import type { Env, JobRecord } from './types';
 import { processStoredItems, log } from './services';
-import { handleUpscaleQueueMessage, markUpscaleFailed } from './upscale';
+import {
+  handleUpscaleQueueMessage,
+  isPermanentUpscaleError,
+  markUpscaleFailed,
+} from './upscale';
 
 /** Messages that keep failing land in the DLQ after this many attempts. */
 const MAX_ATTEMPTS = 5; // must match max_retries in wrangler.toml
@@ -61,17 +65,20 @@ export async function handleQueue(batch: MessageBatch<any>, env: Env) {
       msg.ack();
     } catch (e: any) {
       const attempts = msg.attempts || 1;
+      const permanent = isPermanentUpscaleError(e);
       log('upscale.msg.error', {
         jobId: body.jobId,
         phase: body.phase,
         tx: body.tx,
         ty: body.ty,
         attempts,
+        permanent,
         error: e?.message || String(e),
       });
-      if (attempts < MAX_ATTEMPTS) throw e; // retry
-      // Retries exhausted: record the terminal error, then let the queue route
-      // the message to squoosh-upscale-dlq for inspection.
+      // Bad input / over budget: fail the job now, retrying cannot help.
+      // Backend hiccups: retry, and when the attempts run out record the
+      // terminal error before the message lands in the DLQ.
+      if (!permanent && attempts < MAX_ATTEMPTS) throw e;
       try {
         await markUpscaleFailed(
           env,
@@ -83,6 +90,10 @@ export async function handleQueue(batch: MessageBatch<any>, env: Env) {
           jobId: body.jobId,
           error: markErr?.message || String(markErr),
         });
+      }
+      if (permanent) {
+        msg.ack();
+        continue;
       }
       throw e;
     }

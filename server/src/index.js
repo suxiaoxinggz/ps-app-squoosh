@@ -35,10 +35,17 @@ app.post('/metadata', gate, async (req, res) => {
       imageBase64.replace(/^data:[^;]+;base64,/, ''),
       'base64',
     );
-    const meta = await sharp(buf).rotate().metadata();
+    // Canonical decode: dims must come from decoded pixels, NOT metadata()
+    // (sharp metadata() ignores EXIF orientation; decoded buffer is rotated).
+    const { info } = await sharp(buf)
+      .rotate()
+      .ensureAlpha()
+      .raw()
+      .toBuffer({ resolveWithObject: true });
+    const meta = await sharp(buf).metadata();
     res.json({
-      width: meta.width,
-      height: meta.height,
+      width: info.width,
+      height: info.height,
       format: meta.format,
       size: buf.length,
     });

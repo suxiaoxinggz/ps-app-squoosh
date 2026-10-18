@@ -62,6 +62,16 @@ function putRecord(env: Env, jobId: string, rec: JobRecord): Promise<void> {
   return env.JOBS.put(jobId, JSON.stringify(rec), { expirationTtl: 86400 });
 }
 
+/**
+ * An error retrying cannot fix (bad input, over budget, unreadable image):
+ * the queue marks the job failed immediately instead of burning retries.
+ */
+export class PermanentUpscaleError extends Error {}
+
+export function isPermanentUpscaleError(e: unknown): boolean {
+  return e instanceof PermanentUpscaleError;
+}
+
 async function readInput(env: Env, item: JobItem): Promise<Uint8Array> {
   const obj = await env.BUCKET.get(item.inputKey);
   if (!obj) {
@@ -78,7 +88,7 @@ async function readInput(env: Env, item: JobItem): Promise<Uint8Array> {
  */
 export async function planUpscaleItem(env: Env, item: JobItem): Promise<void> {
   const m = findUpscaleModel(item.model);
-  if (!m) throw new Error(unknownModelMessage(item.model));
+  if (!m) throw new PermanentUpscaleError(unknownModelMessage(item.model));
   const bytes = await readInput(env, item);
   const meta = await renderPost(
     env,
@@ -94,12 +104,14 @@ export async function planUpscaleItem(env: Env, item: JobItem): Promise<void> {
     width < 1 ||
     height < 1
   ) {
-    throw new Error('could not read image dimensions from the backend.');
+    throw new PermanentUpscaleError(
+      'could not read image dimensions from the backend.',
+    );
   }
   const mp = (width * height) / 1e6;
   const limit = mpBudget(m.scale);
   if (mp > limit) {
-    throw new Error(
+    throw new PermanentUpscaleError(
       `input too large (${mp.toFixed(2)}MP). ${m.scale}x models accept <=${limit}MP on the server. Resize first, or use the local edition for large images.`,
     );
   }
@@ -107,12 +119,12 @@ export async function planUpscaleItem(env: Env, item: JobItem): Promise<void> {
   const destW = width * ts;
   const destH = height * ts;
   if (destW > MAX_OUTPUT_DIM || destH > MAX_OUTPUT_DIM) {
-    throw new Error(
+    throw new PermanentUpscaleError(
       `output ${destW}x${destH} exceeds the ${MAX_OUTPUT_DIM}px limit.`,
     );
   }
   if (destW * destH > MAX_OUTPUT_PIXELS) {
-    throw new Error(
+    throw new PermanentUpscaleError(
       `output too large (${(destW * destH) / 1e6}MP, max ${MAX_OUTPUT_PIXELS / 1e6}MP). Use a smaller image or targetScale.`,
     );
   }
