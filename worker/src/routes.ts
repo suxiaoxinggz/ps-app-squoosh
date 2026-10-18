@@ -342,14 +342,15 @@ export function registerRoutes(app: Hono<{ Bindings: Env }>, env: Env) {
     if (env.RENDER_URL) {
       try {
         const ctrl = new AbortController();
-        const t = setTimeout(() => ctrl.abort(), 8000);
+        const t = setTimeout(() => ctrl.abort(), 20000);
         const r = await fetch(`${env.RENDER_URL.replace(/\/$/, '')}/health`, {
           signal: ctrl.signal,
         });
         clearTimeout(t);
         checks.render = r.ok ? 'ok' : `http-${r.status}`;
       } catch (e: any) {
-        checks.render = `unreachable: ${e?.message || e}`;
+        // Free-tier Render sleeps after idle; first hit may time out while it wakes.
+        checks.render = `unreachable (cold start?): ${e?.message || e}`;
       }
     } else {
       checks.render = 'not-configured';

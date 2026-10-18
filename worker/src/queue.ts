@@ -1,5 +1,5 @@
 import type { Env, JobRecord } from './types';
-import { processStoredItems } from './services';
+import { processStoredItems, log } from './services';
 
 export async function handleQueue(batch: MessageBatch<any>, env: Env) {
   for (const msg of batch.messages) {
@@ -32,6 +32,13 @@ export async function handleQueue(batch: MessageBatch<any>, env: Env) {
       }
     }
     await env.JOBS.put(jobId, JSON.stringify(rec), { expirationTtl: 86400 });
+    const failed = rec.items.filter((i) => i.status === 'error').length;
+    log('job.consume', {
+      jobId,
+      status: rec.status,
+      items: rec.items.length,
+      failed,
+    });
     msg.ack();
   }
 }

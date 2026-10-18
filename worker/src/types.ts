@@ -1,8 +1,4 @@
-export interface Env {
-  ASSETS: Fetcher;
-  BUCKET: R2Bucket;
-  JOBS: KVNamespace;
-  QUEUE: Queue<any>;
+export interface Env extends Cloudflare.Env {
   RENDER_URL?: string;
   RENDER_SECRET?: string;
 }

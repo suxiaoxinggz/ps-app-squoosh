@@ -4,6 +4,12 @@ export function ownerTokenFromAuth(auth?: string | null): string {
   return (auth || '').replace(/^Bearer\s+/i, '').trim() || 'anon';
 }
 
+export function log(event: string, fields: Record<string, unknown> = {}) {
+  console.log(
+    JSON.stringify({ event, t: new Date().toISOString(), ...fields }),
+  );
+}
+
 // ---------- constants ----------
 export const MAX_ITEMS_PER_JOB = 20;
 export const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
@@ -203,8 +209,28 @@ export async function readSource(env: Env, source: any) {
           `remote image too large (${len} bytes, max ${MAX_IMAGE_BYTES}).`,
         );
       }
-      const buf = await res.arrayBuffer();
-      const bytes = new Uint8Array(buf);
+      // Bounded stream read: abort as soon as we exceed the cap, even without content-length.
+      const reader = res.body!.getReader();
+      const chunks: Uint8Array[] = [];
+      let total = 0;
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        total += value.length;
+        if (total > MAX_IMAGE_BYTES) {
+          ctrl.abort();
+          throw new Error(
+            `remote image too large (>${MAX_IMAGE_BYTES} bytes).`,
+          );
+        }
+        chunks.push(value);
+      }
+      const bytes = new Uint8Array(total);
+      let off = 0;
+      for (const c of chunks) {
+        bytes.set(c, off);
+        off += c.length;
+      }
       checkImageSize(bytes);
       assertIsImage(bytes, 'url input');
       return {
@@ -464,6 +490,7 @@ export async function submitJob(
         expirationTtl: 86400,
       });
     }
+    log('job.submit', { jobId, items: items.length, sync: true });
     return { jobId, sync: true, inlineBase64, inlineMime };
   }
 
@@ -483,6 +510,7 @@ export async function submitJob(
       expirationTtl: 86400,
     });
   }
+  log('job.submit', { jobId, items: items.length, sync: false });
   return { jobId, sync: false };
 }
 
