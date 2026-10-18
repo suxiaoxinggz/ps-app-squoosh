@@ -1,0 +1,15 @@
+{
+  "servers": {
+    "squoosh": {
+      "url": "https://squoosh.016666666.xyz/mcp",
+      "headers": {
+        "Accept": "application/json, text/event-stream",
+        "Authorization": "Bearer squoosh-local-01"
+      }
+    },
+    "squoosh-local": {
+      "command": "node",
+      "args": ["/Users/suxiaoxing/Desktop/app/competition/ps-app-squoosh/mcp-local/src/server.js"]
+    }
+  }
+}
