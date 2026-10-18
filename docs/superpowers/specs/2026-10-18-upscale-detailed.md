@@ -6,16 +6,16 @@ References: bg2x（MIT）`src/workers/super-resolution.worker.ts`（16KB）、
 
 ## 1. 移植对照表（browser → Node，一一对应，不重发明）
 
-| bg2x（浏览器）                                                   | 我们（server/Node）                                                                             | 说明                                                                            |
-| ---------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------- |
-| `onnxruntime-web`, EP webgpu→wasm                                | `onnxruntime-node`, EP `cpu`                                                                    | Node 无 WebGPU；线程数取 `os.cpus()`，Render 免费机实测后锁死（先设 1，再试 2） |
-| `InferenceSession.create(bytes, {graphOptimizationLevel:'all'})` | 同 API（node 版同名）                                                                           | session 按 modelId 常驻内存复用，不来一张建一次                                 |
-| RGBA→NCHW Float32，`×1/255`，边缘 replicate                      | 逐行照抄 `extractTile`                                                                          | sharp 解码出 RGBA raw，再喂 tile 提取                                           |
-| TILE 256 / OVERLAP 16 / 羽化 `full+ramp`                         | 照抄 `buildBlendWeights`                                                                        | 输出缝否则必有接缝                                                              |
-| 4x 模型出 2x（box-filter 下采样，整数比才用）                    | 照抄，可选 `targetScale` 参数                                                                   | 省一半算量，MCP 默认推荐 2x                                                     |
-| 输出上限 16384px / 2亿像素                                       | 收紧到 8000px / 5000万像素                                                                      | 保 Render；超了报错指本地版                                                     |
-| 模型放 IndexedDB                                                 | 放 Render 磁盘 `/tmp` + 启动预热？否：按需下载到磁盘缓存（Render 磁盘重启丢，丢了重下，可接受） | 权重 URL 照抄 bg2x 配置，注明来源                                               |
-| 单 tile 推理 300s 超时 + GPU 失败回退 CPU                        | 整单 600s 超时＋session 创建 60s 超时（照抄它的 whole-job 超时/`MODEL_LOAD_TIMEOUT` 模型；它没有单 tile 超时，只有 stall 检测），无 GPU 无需回退                                                   | 超时即整张失败，item 记 error；进度只有 queued/processing/done 三态（server 无 tile 级 progress，文档写明，Agent 10s 一询）                                        |
+| bg2x（浏览器）                                                   | 我们（server/Node）                                                                                                                              | 说明                                                                                                                        |
+| ---------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------- |
+| `onnxruntime-web`, EP webgpu→wasm                                | `onnxruntime-node`, EP `cpu`                                                                                                                     | Node 无 WebGPU；线程数取 `os.cpus()`，Render 免费机实测后锁死（先设 1，再试 2）                                             |
+| `InferenceSession.create(bytes, {graphOptimizationLevel:'all'})` | 同 API（node 版同名）                                                                                                                            | session 按 modelId 常驻内存复用，不来一张建一次                                                                             |
+| RGBA→NCHW Float32，`×1/255`，边缘 replicate                      | 逐行照抄 `extractTile`                                                                                                                           | sharp 解码出 RGBA raw，再喂 tile 提取                                                                                       |
+| TILE 256 / OVERLAP 16 / 羽化 `full+ramp`                         | 照抄 `buildBlendWeights`                                                                                                                         | 输出缝否则必有接缝                                                                                                          |
+| 4x 模型出 2x（box-filter 下采样，整数比才用）                    | 照抄，可选 `targetScale` 参数                                                                                                                    | 省一半算量，MCP 默认推荐 2x                                                                                                 |
+| 输出上限 16384px / 2亿像素                                       | 收紧到 8000px / 5000万像素                                                                                                                       | 保 Render；超了报错指本地版                                                                                                 |
+| 模型放 IndexedDB                                                 | 放 Render 磁盘 `/tmp` + 启动预热？否：按需下载到磁盘缓存（Render 磁盘重启丢，丢了重下，可接受）                                                  | 权重 URL 照抄 bg2x 配置，注明来源                                                                                           |
+| 单 tile 推理 300s 超时 + GPU 失败回退 CPU                        | 整单 600s 超时＋session 创建 60s 超时（照抄它的 whole-job 超时/`MODEL_LOAD_TIMEOUT` 模型；它没有单 tile 超时，只有 stall 检测），无 GPU 无需回退 | 超时即整张失败，item 记 error；进度只有 queued/processing/done 三态（server 无 tile 级 progress，文档写明，Agent 10s 一询） |
 
 ## 2. 模型注册表（server 内建，URL 抄 bg2x， dual-source）
 
@@ -82,3 +82,25 @@ References: bg2x（MIT）`src/workers/super-resolution.worker.ts`（16KB）、
 1. server 装包验证（R1，一天出结论）→ 2. 分块移植 + `/upscale`（最小模型）→
 2. 实测矩阵定数 → 4. Worker 队列+工具（此时限额是实测值，一次写对）→
 3. 在线嵌入（可与 1~4 并行）→ 6. 本地 upscale → 7. 文档+smoke+推送。
+
+## 10. 执行优先级（P0→P7，严格按序；codegraph 已验证拷贝边界）
+
+- **P0 上机验证（不动仓库逻辑）**：`server/` 内 `npm i onnxruntime-node`，
+  从 HF 下最小模型（anime-v3 2.5MB）到本地，跑 1 个 tile。
+  只回答 R1（装得上、跑得动）。失败则全停。
+- **P1 原样拷贝（不重写算法）**：新建 `server/src/upscale/`，从 bg2x
+  `src/workers/super-resolution.worker.ts` 逐行抄纯函数
+  （`extractTile`/`buildBlendWeights`/`blendTile`/`downsampleTile`，codegraph 已确认零浏览器依赖），
+  文件头保留 bg2x MIT 署名 + 仓库加 `NOTICE-bg2x.md`。
+  只换两处边界：输入 `ImageData`→sharp RGBA raw（同形状薄包装），
+  输出 `OffscreenCanvas`→raw buffer→sharp；`onnxruntime-web`→`onnxruntime-node`（同名 API）。
+- **P2 server 端点**：`/upscale` + `/upscale/models`，复用现有 `gate` 鉴权和参数校验风格。
+- **P3 上 Render + 标定**：push 即部署；跑第 5 节矩阵，数字落 README；定 MP 预算。
+- **P4 Worker（等 P3 数字，一次写对）**：`submitJob` 处理函数参数化（一处改动同时服务压缩+超分，
+  不复制第二套队列逻辑）；新队列 `squoosh-upscale`（并发 1）+DLQ；`upscale_image`/`smart_upscale`/prompts。
+- **P5 在线 `/upscale`（与 P1~P4 无依赖，可并行）**：bg2x 独立构建挂载 + 导航。
+- **P6 本地 `upscale`**：`mcp-local` 直接 `import` P1 的文件（同一仓库，零重复代码），全 10 模型。
+- **P7 收尾**：smoke 超分用例 + README 数据表 + 推送。
+
+**防返工要点**：分块算法只写一次（P1），Worker（P4）等实测数（P3），
+本地版（P6）import 不复制；任何一步失败都不污染前面步骤的已验证成果。
